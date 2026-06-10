@@ -18,6 +18,7 @@
 - 多材质模式会自动生成对应数量的 `Switch on Int` 引脚，并自动设置取余数量。
 - 自动生成初始化逻辑：读取保存状态，并应用材质显示/隐藏。
 - 自动生成更新逻辑：按键触发切换，并保存当前状态。
+- `Key` 支持直接输入符号按键，例如 `=`, `[`, `]`, `;`，会自动转换为 UE 正确的按键名。
 - 自动生成 `Show Material Section` 节点。
 - 如果变量不存在，会自动创建需要的 `int` 变量。
 - 只需要输入 `Anim Variable`，SaveGame 相关名称自动生成：
@@ -41,7 +42,7 @@ Release 包里包含 UE 5.6 Win64 的预编译插件 DLL。当前公开版本不
 2. 下载插件 zip 附件：
 
    ```text
-   HTBlueprintToggleTool-v1.1.0-UE5.6-Win64-Binary.zip
+   HTBlueprintToggleTool-v1.1.1-UE5.6-Win64-Binary.zip
    ```
 
 3. 不要下载 GitHub 自动生成的 `Source code (zip)` 或 `Source code (tar.gz)`。
@@ -83,6 +84,25 @@ Release 包里包含 UE 5.6 Win64 的预编译插件 DLL。当前公开版本不
    - `Update graph`
    - `Save assets`
 8. 点击 `Generate Toggle Nodes`。
+
+## 按键输入
+
+`Key` 可以填写数字、字母、UE 按键名，也可以直接填写常见符号：
+
+```text
+=, [, ], ;, ,, ., /, \, -, ', ", `
+```
+
+符号会自动转换为 UE 内部按键名：
+
+```text
+= -> Equals
+[ -> LeftBracket
+] -> RightBracket
+; -> Semicolon
+```
+
+也兼容部分中文或全角写法，例如 `等号`、`分号`、`左中括号`、`右中括号`、`＝`、`；`。
 
 ## 命名规则
 
@@ -129,4 +149,3 @@ Save Slot: ChestCloth
 - 如果之前生成过错误或很乱的节点组，建议先手动删除旧节点，再重新生成。
 - 当前公开版本不包含 C++ 源码，主要用于 UE 5.6 Win64 编辑器环境。
 - GitHub Release 页面会自动显示 `Source code (zip)` 和 `Source code (tar.gz)`，这是 GitHub 默认生成的仓库快照。正常安装插件时，请下载插件 zip 附件。
-
