@@ -1,0 +1,18 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0.0",
+	"FriendlyName": "HT Blueprint Toggle Tool",
+	"Description": "Editor panel for generating AnimBP/SaveGame material toggle blueprint nodes.",
+	"Category": "HT",
+	"CreatedBy": "loyal37",
+	"EnabledByDefault": false,
+	"CanContainContent": false,
+	"Modules": [
+		{
+			"Name": "HTBlueprintToggleTool",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}
