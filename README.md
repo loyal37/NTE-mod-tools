@@ -2,7 +2,7 @@
 
 这是一个 Unreal Engine 5 编辑器插件，用来一键生成「动画蓝图 + SaveGame 蓝图」里的材质显示/隐藏切换节点。
 
-当前公开仓库只发布插件说明和二进制安装包，不公开插件 C++ 源码。
+当前公开仓库包含插件 C++ 源码。Release 里的自定义安装包只包含预编译二进制文件，不附带 `Source/`。
 
 ## 功能
 
@@ -35,7 +35,7 @@
 - Visual Studio 2022 C++ 工具链
 - .NET Framework Developer Pack / SDK 4.6 或更高版本
 
-Release 包里包含 UE 5.6 Win64 的预编译插件 DLL。当前公开版本不包含 C++ 源码。
+Release 包里包含 UE 5.6 Win64 的预编译插件 DLL。自定义 Binary zip 不包含 C++ 源码。
 
 ## 安装方法
 
@@ -46,7 +46,7 @@ Release 包里包含 UE 5.6 Win64 的预编译插件 DLL。当前公开版本不
    HTBlueprintToggleTool-v1.1.3-UE5.6-Win64-Binary.zip
    ```
 
-3. 不要下载 GitHub 自动生成的 `Source code (zip)` 或 `Source code (tar.gz)`。
+3. 安装插件时不要下载 GitHub 自动生成的 `Source code (zip)` 或 `Source code (tar.gz)`，请下载上面的 Binary zip 附件。
 4. 关闭 Unreal Editor。
 5. 解压后，把 `HTBlueprintToggleTool` 文件夹放到工程目录：
 
@@ -173,5 +173,5 @@ Save Slot: ChestCloth
 
 - 插件会追加生成新节点，不会自动删除旧节点。
 - 如果之前生成过错误或很乱的节点组，建议先手动删除旧节点，再重新生成。
-- 当前公开版本不包含 C++ 源码，主要用于 UE 5.6 Win64 编辑器环境。
-- GitHub Release 页面会自动显示 `Source code (zip)` 和 `Source code (tar.gz)`，这是 GitHub 默认生成的仓库快照。正常安装插件时，请下载插件 zip 附件。
+- 仓库中的 `Source/` 是插件源码，主要用于二次开发或自行编译。
+- GitHub Release 页面会自动显示 `Source code (zip)` 和 `Source code (tar.gz)`，这是 GitHub 默认生成的仓库快照。正常安装插件时，请下载插件 Binary zip 附件。
