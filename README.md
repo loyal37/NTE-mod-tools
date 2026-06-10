@@ -2,8 +2,6 @@
 
 这是一个 Unreal Engine 5 编辑器插件，用来一键生成「动画蓝图 + SaveGame 蓝图」里的材质显示/隐藏切换节点。
 
-当前公开仓库包含插件 C++ 源码。Release 里的自定义安装包只包含预编译二进制文件，不附带 `Source/`。
-
 ## 功能
 
 - 在编辑器菜单 `Tools > HT Blueprint Toggle Tool` 打开工具面板。
