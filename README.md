@@ -19,7 +19,7 @@
 - 自动生成初始化逻辑：读取保存状态，并应用材质显示/隐藏。
 - 自动生成更新逻辑：按键触发切换，并保存当前状态。
 - `Key` 支持直接输入符号按键，例如 `=`, `[`, `]`, `;`，会自动转换为 UE 正确的按键名。
-- `Key` 支持组合按键，例如 `ctrl 6`、`shift 6`。
+- `Key` 支持组合按键，例如 `ctrl 6`、`shift 6`、`alt 6`。
 - 自动生成 `Show Material Section` 节点。
 - 如果变量不存在，会自动创建需要的 `int` 变量。
 - 只需要输入 `Anim Variable`，SaveGame 相关名称自动生成：
@@ -43,7 +43,7 @@ Release 包里包含 UE 5.6 Win64 的预编译插件 DLL。当前公开版本不
 2. 下载插件 zip 附件：
 
    ```text
-   HTBlueprintToggleTool-v1.1.2-UE5.6-Win64-Binary.zip
+   HTBlueprintToggleTool-v1.1.3-UE5.6-Win64-Binary.zip
    ```
 
 3. 不要下载 GitHub 自动生成的 `Source code (zip)` 或 `Source code (tar.gz)`。
@@ -105,13 +105,15 @@ Release 包里包含 UE 5.6 Win64 的预编译插件 DLL。当前公开版本不
 
 也兼容部分中文或全角写法，例如 `等号`、`分号`、`左中括号`、`右中括号`、`＝`、`；`。
 
-组合按键目前支持 `ctrl` 和 `shift`：
+组合按键目前支持 `ctrl`、`shift` 和 `alt`：
 
 ```text
 ctrl 6
 shift 6
+alt 6
 ctrl =
 shift ;
+alt [
 ```
 
 输入 `ctrl 6` 时，插件会生成：
@@ -125,6 +127,8 @@ Was Recently Rendered
 ```
 
 输入 `shift 6` 时同理，会使用左/右 Shift。
+
+输入 `alt 6` 时同理，会使用左/右 Alt。
 
 ## 命名规则
 
