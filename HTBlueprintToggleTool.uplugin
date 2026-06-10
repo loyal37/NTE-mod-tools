@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 3,
-	"VersionName": "1.1.1",
+	"Version": 4,
+	"VersionName": "1.1.2",
 	"FriendlyName": "HT Blueprint Toggle Tool",
 	"Description": "Editor panel for generating AnimBP/SaveGame material toggle blueprint nodes.",
 	"Category": "HT",
