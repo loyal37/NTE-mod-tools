@@ -45,7 +45,7 @@
 2. 下载插件 zip 附件：
 
    ```text
-   HTToggleTool-v1.2.2.zip
+   HTToggleTool-v1.2.3.zip
    ```
 
 3. 关闭 Unreal Editor。
