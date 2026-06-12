@@ -1,6 +1,7 @@
 #include "SHTCookedAssetExporter.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetThumbnail.h"
 #include "DesktopPlatformModule.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -32,6 +33,7 @@ namespace HTCookedAssetExporter
 	static const TCHAR* ConfigSection = TEXT("HTBlueprintToggleTool.CookedAssetExporter");
 	static const TCHAR* SourceDirectoryKey = TEXT("CookedSourceDirectory");
 	static const TCHAR* OutputDirectoryKey = TEXT("OutputDirectory");
+	static const TCHAR* SelectedAssetsKeyPrefix = TEXT("SelectedAssets_");
 
 	static FString NormalizeDirectory(FString Directory)
 	{
@@ -57,6 +59,8 @@ namespace HTCookedAssetExporter
 
 void SHTCookedAssetExporter::Construct(const FArguments& InArgs)
 {
+	ThumbnailPool = MakeShared<FAssetThumbnailPool>(64);
+
 	FString CookedDirectory = FPaths::Combine(
 		FPaths::ProjectSavedDir(),
 		TEXT("Cooked/Windows"),
@@ -305,6 +309,7 @@ FReply SHTCookedAssetExporter::OnSelectAllClicked()
 	}
 	AssetListView->RequestListRefresh();
 	UpdateSelectionSummary();
+	SaveSelection();
 	return FReply::Handled();
 }
 
@@ -316,6 +321,7 @@ FReply SHTCookedAssetExporter::OnClearSelectionClicked()
 	}
 	AssetListView->RequestListRefresh();
 	UpdateSelectionSummary();
+	SaveSelection();
 	return FReply::Handled();
 }
 
@@ -453,13 +459,13 @@ void SHTCookedAssetExporter::ScanSourceDirectory()
 		return;
 	}
 
-	TMap<FName, FString> AssetTypes;
+	TMap<FName, FAssetData> AssetsByPackageName;
 	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
 	TArray<FAssetData> ProjectAssets;
 	AssetRegistryModule.Get().GetAssetsByPath(FName(*GamePath), ProjectAssets, true);
 	for (const FAssetData& AssetData : ProjectAssets)
 	{
-		AssetTypes.Add(AssetData.PackageName, AssetData.AssetClassPath.GetAssetName().ToString());
+		AssetsByPackageName.Add(AssetData.PackageName, AssetData);
 	}
 
 	TArray<FString> ProjectUAssetFiles;
@@ -467,22 +473,29 @@ void SHTCookedAssetExporter::ScanSourceDirectory()
 	ProjectUAssetFiles.Sort();
 	const FString ProjectPrefix = ProjectAssetDirectory + TEXT("/");
 	const TCHAR* SidecarExtensions[] = { TEXT("uasset"), TEXT("uexp"), TEXT("ubulk"), TEXT("uptnl") };
+	TSet<FString> SavedSelectedPaths;
+	LoadSelectedAssetPaths(SavedSelectedPaths);
 	int32 CookedAssetCount = 0;
 
 	for (const FString& ProjectUAssetFile : ProjectUAssetFiles)
 	{
 		TSharedPtr<FHTCookedAssetExportItem> Item = MakeShared<FHTCookedAssetExportItem>();
 		Item->RelativeAssetPath = ProjectUAssetFile;
-		FPaths::MakePathRelativeTo(Item->RelativeAssetPath, *ProjectPrefix);
-		FPaths::MakeStandardFilename(Item->RelativeAssetPath);
-
-		FString PackageName;
-		if (FPackageName::TryConvertFilenameToLongPackageName(ProjectUAssetFile, PackageName))
+		if (!FPaths::MakePathRelativeTo(Item->RelativeAssetPath, *ProjectPrefix))
 		{
-			if (const FString* FoundType = AssetTypes.Find(FName(*PackageName)))
-			{
-				Item->AssetType = *FoundType;
-			}
+			continue;
+		}
+		FPaths::MakeStandardFilename(Item->RelativeAssetPath);
+		Item->AssetName = FPaths::GetBaseFilename(Item->RelativeAssetPath);
+		Item->FolderPath = FPaths::GetPath(Item->RelativeAssetPath);
+
+		FString RelativePackagePath = FPaths::ChangeExtension(Item->RelativeAssetPath, TEXT(""));
+		FString PackageName = FPaths::Combine(GamePath, RelativePackagePath);
+		FPaths::MakeStandardFilename(PackageName);
+		if (const FAssetData* FoundAsset = AssetsByPackageName.Find(FName(*PackageName)))
+		{
+			Item->AssetType = FoundAsset->AssetClassPath.GetAssetName().ToString();
+			Item->Thumbnail = MakeShared<FAssetThumbnail>(*FoundAsset, 48, 48, ThumbnailPool);
 		}
 
 		const FString CookedUAssetFile = FPaths::Combine(SourceDirectory, Item->RelativeAssetPath);
@@ -499,6 +512,7 @@ void SHTCookedAssetExporter::ScanSourceDirectory()
 		if (!Item->SourceFiles.IsEmpty())
 		{
 			++CookedAssetCount;
+			Item->bSelected = SavedSelectedPaths.Contains(Item->RelativeAssetPath);
 		}
 
 		AssetItems.Add(Item);
@@ -548,13 +562,21 @@ void SHTCookedAssetExporter::OnItemCheckStateChanged(ECheckBoxState NewState, TS
 	{
 		Item->bSelected = !Item->SourceFiles.IsEmpty() && NewState == ECheckBoxState::Checked;
 		UpdateSelectionSummary();
+		SaveSelection();
 	}
 }
 
 TSharedRef<ITableRow> SHTCookedAssetExporter::GenerateAssetRow(TSharedPtr<FHTCookedAssetExportItem> Item, const TSharedRef<STableViewBase>& OwnerTable)
 {
+	TSharedRef<SWidget> ThumbnailWidget = Item->Thumbnail.IsValid()
+		? Item->Thumbnail->MakeThumbnailWidget()
+		: StaticCastSharedRef<SWidget>(SNew(SImage).Image(FAppStyle::GetBrush("ClassIcon.Object")));
+	const FString DetailText = Item->FolderPath.IsEmpty()
+		? Item->AssetType
+		: FString::Printf(TEXT("%s  |  %s"), *Item->AssetType, *Item->FolderPath);
+
 	return SNew(STableRow<TSharedPtr<FHTCookedAssetExportItem>>, OwnerTable)
-		.Padding(FMargin(4, 2))
+		.Padding(FMargin(4, 3))
 		[
 			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot()
@@ -568,14 +590,38 @@ TSharedRef<ITableRow> SHTCookedAssetExporter::GenerateAssetRow(TSharedPtr<FHTCoo
 				.OnCheckStateChanged(this, &SHTCookedAssetExporter::OnItemCheckStateChanged, Item)
 			]
 			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(0, 0, 10, 0)
+			[
+				SNew(SBox)
+				.WidthOverride(48)
+				.HeightOverride(48)
+				[
+					ThumbnailWidget
+				]
+			]
+			+ SHorizontalBox::Slot()
 			.FillWidth(1.0f)
 			.VAlign(VAlign_Center)
 			[
-				SNew(STextBlock)
-				.Text(FText::FromString(Item->AssetType.IsEmpty()
-					? Item->RelativeAssetPath
-					: FString::Printf(TEXT("%s  [%s]"), *Item->RelativeAssetPath, *Item->AssetType)))
-				.ToolTipText(FText::FromString(Item->RelativeAssetPath))
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString(Item->AssetName))
+					.Font(FAppStyle::GetFontStyle("NormalFontBold"))
+					.ToolTipText(FText::FromString(Item->RelativeAssetPath))
+				]
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				.Padding(0, 3, 0, 0)
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString(DetailText))
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				]
 			]
 			+ SHorizontalBox::Slot()
 			.AutoWidth()
@@ -667,11 +713,47 @@ bool SHTCookedAssetExporter::GetProjectAssetDirectory(const FString& CookedSourc
 		return false;
 	}
 
-	OutProjectDirectory = FPaths::Combine(FPaths::ProjectContentDir(), ContentRelativePath);
-	FPaths::NormalizeDirectoryName(OutProjectDirectory);
+	OutProjectDirectory = HTCookedAssetExporter::NormalizeDirectory(FPaths::Combine(FPaths::ProjectContentDir(), ContentRelativePath));
 	OutGamePath = TEXT("/Game/") + ContentRelativePath;
 	FPaths::MakeStandardFilename(OutGamePath);
 	return true;
+}
+
+FString SHTCookedAssetExporter::GetSelectionConfigKey() const
+{
+	const FString NormalizedSource = HTCookedAssetExporter::NormalizeDirectory(GetSourceDirectory()).ToLower();
+	return FString::Printf(TEXT("%s%08X"), HTCookedAssetExporter::SelectedAssetsKeyPrefix, GetTypeHash(NormalizedSource));
+}
+
+void SHTCookedAssetExporter::LoadSelectedAssetPaths(TSet<FString>& OutSelectedPaths) const
+{
+	TArray<FString> SelectedPaths;
+	GConfig->GetArray(HTCookedAssetExporter::ConfigSection, *GetSelectionConfigKey(), SelectedPaths, GEditorPerProjectIni);
+	for (FString& Path : SelectedPaths)
+	{
+		FPaths::MakeStandardFilename(Path);
+		OutSelectedPaths.Add(MoveTemp(Path));
+	}
+}
+
+void SHTCookedAssetExporter::SaveSelection() const
+{
+	if (!GConfig || !SourceDirectoryBox.IsValid())
+	{
+		return;
+	}
+
+	TArray<FString> SelectedPaths;
+	for (const TSharedPtr<FHTCookedAssetExportItem>& Item : AssetItems)
+	{
+		if (Item.IsValid() && Item->bSelected)
+		{
+			SelectedPaths.Add(Item->RelativeAssetPath);
+		}
+	}
+	SelectedPaths.Sort();
+	GConfig->SetArray(HTCookedAssetExporter::ConfigSection, *GetSelectionConfigKey(), SelectedPaths, GEditorPerProjectIni);
+	GConfig->Flush(false, GEditorPerProjectIni);
 }
 
 FString SHTCookedAssetExporter::GetExportRootDirectory(const FString& CookedSourceDirectory, const FString& OutputDirectory) const
