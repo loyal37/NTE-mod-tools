@@ -19,6 +19,7 @@ public:
 
 private:
 	FReply OnGenerateClicked();
+	FReply OnOpenCookedAssetExporterClicked();
 	FReply OnOpenSettingsClicked();
 	FReply OnCloseSettingsClicked();
 
@@ -37,6 +38,7 @@ private:
 
 	FString AnimBlueprintPath;
 	FString SaveGameBlueprintPath;
+	TWeakPtr<SWindow> CookedAssetExporterWindow;
 	TWeakPtr<SWindow> SettingsWindow;
 	TSharedPtr<SEditableTextBox> ToggleVariableBox;
 	TSharedPtr<SEditableTextBox> KeyNameBox;

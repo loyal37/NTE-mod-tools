@@ -7,6 +7,7 @@
 ## 功能
 
 - 在编辑器菜单 `Tools > HT Blueprint Toggle Tool` 打开工具面板。
+- 主面板右上角提供 `Cooked Assets` 入口，可以从烘焙目录选择需要的角色资产并复制到外部打包目录。
 - 右上角 `Settings` 设置窗口可以直接从工程里选择蓝图资产：
   - Anim Blueprint
   - SaveGame Blueprint
@@ -27,6 +28,8 @@
   - Save Slot：`AnimVariable`
 - `Section Index` 和 `LOD Index` 默认固定为 `0`。
 - 生成的节点会按区域排布，并放进注释框，方便后续查看和移动。
+- 烘焙资产导出时以 `.uasset` 为选择单位，并自动携带同名 `.uexp`、`.ubulk`、`.uptnl` 文件。
+- 导出会保留资产在烘焙目录下的相对文件夹结构，不会自动复制未勾选的骨骼、物理资产或材质实例。
 
 ## 环境要求
 
@@ -43,7 +46,7 @@ Release 包里包含 UE 5.6 Win64 的预编译插件 DLL。自定义 Binary zip 
 2. 下载插件 zip 附件：
 
    ```text
-   HTBlueprintToggleTool-v1.1.3-UE5.6-Win64-Binary.zip
+   HTBlueprintToggleTool-v1.2.0-UE5.6-Win64-Binary.zip
    ```
 
 3. 安装插件时不要下载 GitHub 自动生成的 `Source code (zip)` 或 `Source code (tar.gz)`，请下载上面的 Binary zip 附件。
@@ -85,6 +88,36 @@ Release 包里包含 UE 5.6 Win64 的预编译插件 DLL。自定义 Binary zip 
    - `Update graph`
    - `Save assets`
 8. 点击 `Generate Toggle Nodes`。
+
+## 烘焙资产导出
+
+1. 点击主面板右上角、`Settings` 左侧的 `Cooked Assets`。
+2. `Cooked source` 选择已烘焙角色资产目录，例如：
+
+   ```text
+   Saved/Cooked/Windows/HT/Content/Characters/Player/010_nanally
+   ```
+
+3. `Output directory` 选择外部打包器中的角色目录。
+4. 点击 `Scan`，在列表中勾选需要打包的 `.uasset`。
+5. 点击 `Export selected assets`。
+
+选择一个 `.uasset` 时，插件会自动复制同名伴随文件。例如选择：
+
+```text
+T_player_010_nanally_01_d.uasset
+```
+
+会自动复制存在的：
+
+```text
+T_player_010_nanally_01_d.uasset
+T_player_010_nanally_01_d.uexp
+T_player_010_nanally_01_d.ubulk
+T_player_010_nanally_01_d.uptnl
+```
+
+没有勾选的骨骼、物理资产、材质实例等文件不会输出。
 
 ## 按键输入
 

@@ -6,6 +6,7 @@
 #include "Framework/Notifications/NotificationManager.h"
 #include "HTBlueprintToggleGenerator.h"
 #include "PropertyCustomizationHelpers.h"
+#include "SHTCookedAssetExporter.h"
 #include "Styling/AppStyle.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
@@ -65,6 +66,34 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						SNew(STextBlock)
 						.Text(LOCTEXT("Title", "HT Blueprint Toggle Tool"))
 						.Font(FAppStyle::GetFontStyle("DetailsView.CategoryFontStyle"))
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(0, 0, 6, 0)
+					[
+						SNew(SButton)
+						.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+						.ToolTipText(LOCTEXT("CookedAssetsTooltip", "Select cooked assets and copy them to an external packager directory."))
+						.OnClicked(this, &SHTBlueprintToggleToolPanel::OnOpenCookedAssetExporterClicked)
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.VAlign(VAlign_Center)
+							.Padding(0, 0, 4, 0)
+							[
+								SNew(SImage)
+								.Image(FAppStyle::GetBrush("Icons.Package"))
+							]
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.VAlign(VAlign_Center)
+							[
+								SNew(STextBlock)
+								.Text(LOCTEXT("CookedAssetsButton", "Cooked Assets"))
+							]
+						]
 					]
 					+ SHorizontalBox::Slot()
 					.AutoWidth()
@@ -306,6 +335,27 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeBlueprintPickerRow(const FT
 			.ObjectPath(bAnimBlueprint ? TAttribute<FString>(this, &SHTBlueprintToggleToolPanel::GetAnimBlueprintPath) : TAttribute<FString>(this, &SHTBlueprintToggleToolPanel::GetSaveGameBlueprintPath))
 			.OnObjectChanged(bAnimBlueprint ? FOnSetObject::CreateSP(this, &SHTBlueprintToggleToolPanel::OnAnimBlueprintChanged) : FOnSetObject::CreateSP(this, &SHTBlueprintToggleToolPanel::OnSaveGameBlueprintChanged))
 		];
+}
+
+FReply SHTBlueprintToggleToolPanel::OnOpenCookedAssetExporterClicked()
+{
+	if (CookedAssetExporterWindow.IsValid())
+	{
+		CookedAssetExporterWindow.Pin()->BringToFront();
+		return FReply::Handled();
+	}
+
+	TSharedRef<SWindow> Window = SNew(SWindow)
+		.Title(LOCTEXT("CookedAssetExporterTitle", "HT Cooked Asset Exporter"))
+		.ClientSize(FVector2D(920.0f, 680.0f))
+		.SupportsMaximize(true)
+		.SupportsMinimize(false)
+		.SizingRule(ESizingRule::UserSized);
+
+	CookedAssetExporterWindow = Window;
+	Window->SetContent(SNew(SHTCookedAssetExporter));
+	FSlateApplication::Get().AddWindow(Window);
+	return FReply::Handled();
 }
 
 FReply SHTBlueprintToggleToolPanel::OnOpenSettingsClicked()
