@@ -35,9 +35,7 @@
 ## 环境要求
 
 - Unreal Engine 5.6
-- Windows Win64 编辑器
-- Visual Studio 2022 C++ 工具链
-- .NET Framework Developer Pack / SDK 4.6 或更高版本
+
 
 ## 安装方法
 
