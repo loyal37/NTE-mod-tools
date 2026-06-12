@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AssetThumbnail.h"
 #include "Widgets/SCompoundWidget.h"
 
 class SCheckBox;
@@ -14,8 +15,11 @@ template <typename ItemType> class SListView;
 struct FHTCookedAssetExportItem
 {
 	FString RelativeAssetPath;
+	FString AssetName;
+	FString FolderPath;
 	FString AssetType;
 	TArray<FString> SourceFiles;
+	TSharedPtr<FAssetThumbnail> Thumbnail;
 	int64 TotalSize = 0;
 	bool bSelected = false;
 };
@@ -49,11 +53,15 @@ private:
 	FString GetOutputDirectory() const;
 	bool GetProjectAssetDirectory(const FString& CookedSourceDirectory, FString& OutProjectDirectory, FString& OutGamePath) const;
 	FString GetExportRootDirectory(const FString& CookedSourceDirectory, const FString& OutputDirectory) const;
+	FString GetSelectionConfigKey() const;
+	void LoadSelectedAssetPaths(TSet<FString>& OutSelectedPaths) const;
+	void SaveSelection() const;
 	void SaveDirectories() const;
 	bool ChooseDirectory(const FText& DialogTitle, const FString& DefaultPath, FString& OutDirectory) const;
 
 	TArray<TSharedPtr<FHTCookedAssetExportItem>> AssetItems;
 	TArray<TSharedPtr<FHTCookedAssetExportItem>> FilteredAssetItems;
+	TSharedPtr<FAssetThumbnailPool> ThumbnailPool;
 	TSharedPtr<SListView<TSharedPtr<FHTCookedAssetExportItem>>> AssetListView;
 	TSharedPtr<SEditableTextBox> SourceDirectoryBox;
 	TSharedPtr<SEditableTextBox> OutputDirectoryBox;
