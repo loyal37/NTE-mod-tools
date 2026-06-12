@@ -13,6 +13,7 @@ public class HTBlueprintToggleTool : ModuleRules
 				"BlueprintGraph",
 				"Core",
 				"CoreUObject",
+				"DesktopPlatform",
 				"EditorStyle",
 				"Engine",
 				"InputCore",
