@@ -459,44 +459,35 @@ void SHTCookedAssetExporter::ScanSourceDirectory()
 		return;
 	}
 
-	TMap<FName, FAssetData> AssetsByPackageName;
 	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
 	TArray<FAssetData> ProjectAssets;
 	AssetRegistryModule.Get().GetAssetsByPath(FName(*GamePath), ProjectAssets, true);
-	for (const FAssetData& AssetData : ProjectAssets)
+	ProjectAssets.Sort([](const FAssetData& Left, const FAssetData& Right)
 	{
-		AssetsByPackageName.Add(AssetData.PackageName, AssetData);
-	}
+		return Left.PackageName.LexicalLess(Right.PackageName);
+	});
 
-	TArray<FString> ProjectUAssetFiles;
-	IFileManager::Get().FindFilesRecursive(ProjectUAssetFiles, *ProjectAssetDirectory, TEXT("*.uasset"), true, false, false);
-	ProjectUAssetFiles.Sort();
-	const FString ProjectPrefix = ProjectAssetDirectory + TEXT("/");
 	const TCHAR* SidecarExtensions[] = { TEXT("uasset"), TEXT("uexp"), TEXT("ubulk"), TEXT("uptnl") };
 	TSet<FString> SavedSelectedPaths;
 	LoadSelectedAssetPaths(SavedSelectedPaths);
 	int32 CookedAssetCount = 0;
+	const FString GamePathPrefix = GamePath + TEXT("/");
 
-	for (const FString& ProjectUAssetFile : ProjectUAssetFiles)
+	for (const FAssetData& AssetData : ProjectAssets)
 	{
-		TSharedPtr<FHTCookedAssetExportItem> Item = MakeShared<FHTCookedAssetExportItem>();
-		Item->RelativeAssetPath = ProjectUAssetFile;
-		if (!FPaths::MakePathRelativeTo(Item->RelativeAssetPath, *ProjectPrefix))
+		const FString PackageName = AssetData.PackageName.ToString();
+		if (!PackageName.StartsWith(GamePathPrefix, ESearchCase::IgnoreCase))
 		{
 			continue;
 		}
-		FPaths::MakeStandardFilename(Item->RelativeAssetPath);
-		Item->AssetName = FPaths::GetBaseFilename(Item->RelativeAssetPath);
-		Item->FolderPath = FPaths::GetPath(Item->RelativeAssetPath);
 
-		FString RelativePackagePath = FPaths::ChangeExtension(Item->RelativeAssetPath, TEXT(""));
-		FString PackageName = FPaths::Combine(GamePath, RelativePackagePath);
-		FPaths::MakeStandardFilename(PackageName);
-		if (const FAssetData* FoundAsset = AssetsByPackageName.Find(FName(*PackageName)))
-		{
-			Item->AssetType = FoundAsset->AssetClassPath.GetAssetName().ToString();
-			Item->Thumbnail = MakeShared<FAssetThumbnail>(*FoundAsset, 48, 48, ThumbnailPool);
-		}
+		TSharedPtr<FHTCookedAssetExportItem> Item = MakeShared<FHTCookedAssetExportItem>();
+		Item->RelativeAssetPath = PackageName.Mid(GamePathPrefix.Len()) + TEXT(".uasset");
+		FPaths::NormalizeFilename(Item->RelativeAssetPath);
+		Item->AssetName = AssetData.AssetName.ToString();
+		Item->FolderPath = FPaths::GetPath(Item->RelativeAssetPath);
+		Item->AssetType = AssetData.AssetClassPath.GetAssetName().ToString();
+		Item->Thumbnail = MakeShared<FAssetThumbnail>(AssetData, 48, 48, ThumbnailPool);
 
 		const FString CookedUAssetFile = FPaths::Combine(SourceDirectory, Item->RelativeAssetPath);
 		const FString BasePath = FPaths::Combine(FPaths::GetPath(CookedUAssetFile), FPaths::GetBaseFilename(CookedUAssetFile));
@@ -715,7 +706,7 @@ bool SHTCookedAssetExporter::GetProjectAssetDirectory(const FString& CookedSourc
 
 	OutProjectDirectory = HTCookedAssetExporter::NormalizeDirectory(FPaths::Combine(FPaths::ProjectContentDir(), ContentRelativePath));
 	OutGamePath = TEXT("/Game/") + ContentRelativePath;
-	FPaths::MakeStandardFilename(OutGamePath);
+	FPaths::NormalizeDirectoryName(OutGamePath);
 	return true;
 }
 
@@ -731,7 +722,7 @@ void SHTCookedAssetExporter::LoadSelectedAssetPaths(TSet<FString>& OutSelectedPa
 	GConfig->GetArray(HTCookedAssetExporter::ConfigSection, *GetSelectionConfigKey(), SelectedPaths, GEditorPerProjectIni);
 	for (FString& Path : SelectedPaths)
 	{
-		FPaths::MakeStandardFilename(Path);
+		FPaths::NormalizeFilename(Path);
 		OutSelectedPaths.Add(MoveTemp(Path));
 	}
 }
