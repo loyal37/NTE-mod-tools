@@ -45,7 +45,7 @@
 2. 下载插件 zip 附件：
 
    ```text
-   HTToggleTool-v1.2.3.zip
+   HTToggleTool-v1.2.4.zip
    ```
 
 3. 关闭 Unreal Editor。
@@ -100,6 +100,14 @@
 4. 插件会把 Cooked 路径映射到工程对应的 `Content` 文件夹，并在列表中显示工程资产及其类型。
 5. 在列表中勾选需要打包的工程资产；没有对应烘焙文件的项目会显示 `Not cooked`。
 6. 点击 `Export selected assets`。
+
+勾选 `Export and package` 后，插件会在导出成功后启动：
+
+```text
+D:/NTE Mod Packager/NTE Mod Packager.exe
+```
+
+该选项会记住上次的勾选状态。
 
 两个目录会自动保存，关闭窗口或重启编辑器后不会重置。输出时会自动建立角色目录，例如：
 
