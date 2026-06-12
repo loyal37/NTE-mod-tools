@@ -6,6 +6,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "HAL/FileManager.h"
+#include "HAL/PlatformProcess.h"
 #include "HAL/PlatformFileManager.h"
 #include "IDesktopPlatform.h"
 #include "Misc/App.h"
@@ -33,7 +34,9 @@ namespace HTCookedAssetExporter
 	static const TCHAR* ConfigSection = TEXT("HTBlueprintToggleTool.CookedAssetExporter");
 	static const TCHAR* SourceDirectoryKey = TEXT("CookedSourceDirectory");
 	static const TCHAR* OutputDirectoryKey = TEXT("OutputDirectory");
+	static const TCHAR* ExportAndPackageKey = TEXT("ExportAndPackage");
 	static const TCHAR* SelectedAssetsKeyPrefix = TEXT("SelectedAssets_");
+	static const TCHAR* PackagerExecutable = TEXT("D:/NTE Mod Packager/NTE Mod Packager.exe");
 
 	static FString NormalizeDirectory(FString Directory)
 	{
@@ -67,8 +70,10 @@ void SHTCookedAssetExporter::Construct(const FArguments& InArgs)
 		FApp::GetProjectName(),
 		TEXT("Content/Characters/Player"));
 	FString OutputDirectory;
+	bool bExportAndPackage = false;
 	GConfig->GetString(HTCookedAssetExporter::ConfigSection, HTCookedAssetExporter::SourceDirectoryKey, CookedDirectory, GEditorPerProjectIni);
 	GConfig->GetString(HTCookedAssetExporter::ConfigSection, HTCookedAssetExporter::OutputDirectoryKey, OutputDirectory, GEditorPerProjectIni);
+	GConfig->GetBool(HTCookedAssetExporter::ConfigSection, HTCookedAssetExporter::ExportAndPackageKey, bExportAndPackage, GEditorPerProjectIni);
 
 	ChildSlot
 	[
@@ -225,13 +230,30 @@ void SHTCookedAssetExporter::Construct(const FArguments& InArgs)
 				]
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
-				.VAlign(VAlign_Center)
+				.VAlign(VAlign_Top)
 				.Padding(12, 0, 0, 0)
 				[
-					SAssignNew(OverwriteCheckBox, SCheckBox)
-					.IsChecked(ECheckBoxState::Checked)
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot()
+					.AutoHeight()
 					[
-						SNew(STextBlock).Text(LOCTEXT("Overwrite", "Overwrite existing files"))
+						SAssignNew(OverwriteCheckBox, SCheckBox)
+						.IsChecked(ECheckBoxState::Checked)
+						[
+							SNew(STextBlock).Text(LOCTEXT("Overwrite", "Overwrite existing files"))
+						]
+					]
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					.Padding(0, 6, 0, 0)
+					[
+						SAssignNew(ExportAndPackageCheckBox, SCheckBox)
+						.IsChecked(bExportAndPackage ? ECheckBoxState::Checked : ECheckBoxState::Unchecked)
+						.OnCheckStateChanged(this, &SHTCookedAssetExporter::OnExportAndPackageCheckStateChanged)
+						.ToolTipText(LOCTEXT("ExportAndPackageTooltip", "After a successful export, launch NTE Mod Packager."))
+						[
+							SNew(STextBlock).Text(LOCTEXT("ExportAndPackage", "Export and package"))
+						]
 					]
 				]
 			]
@@ -338,9 +360,17 @@ FReply SHTCookedAssetExporter::OnExportClicked()
 	const FString SourceDirectory = NormalizeDirectory(GetSourceDirectory());
 	const FString OutputDirectory = NormalizeDirectory(GetOutputDirectory());
 	const FString ExportRootDirectory = GetExportRootDirectory(SourceDirectory, OutputDirectory);
+	const bool bExportAndPackage = ExportAndPackageCheckBox.IsValid() && ExportAndPackageCheckBox->IsChecked();
 	if (!IFileManager::Get().DirectoryExists(*SourceDirectory))
 	{
 		ShowStatus(LOCTEXT("InvalidSource", "The cooked source directory does not exist."), true);
+		return FReply::Handled();
+	}
+	if (bExportAndPackage && !IFileManager::Get().FileExists(HTCookedAssetExporter::PackagerExecutable))
+	{
+		ShowStatus(FText::Format(
+			LOCTEXT("MissingPackager", "NTE Mod Packager was not found: {0}"),
+			FText::FromString(HTCookedAssetExporter::PackagerExecutable)), true);
 		return FReply::Handled();
 	}
 	const FString SourcePrefix = SourceDirectory + TEXT("/");
@@ -419,11 +449,42 @@ FReply SHTCookedAssetExporter::OnExportClicked()
 		return FReply::Handled();
 	}
 
-	ShowStatus(FText::Format(
-		LOCTEXT("ExportSuccess", "Export complete: {0} assets, {1} files copied, {2} skipped."),
-		FText::AsNumber(SelectedItems.Num()),
-		FText::AsNumber(CopiedFiles),
-		FText::AsNumber(SkippedFiles)));
+	if (bExportAndPackage)
+	{
+		const FString PackagerWorkingDirectory = FPaths::GetPath(HTCookedAssetExporter::PackagerExecutable);
+		FProcHandle PackagerProcess = FPlatformProcess::CreateProc(
+			HTCookedAssetExporter::PackagerExecutable,
+			nullptr,
+			true,
+			false,
+			false,
+			nullptr,
+			0,
+			*PackagerWorkingDirectory,
+			nullptr);
+		if (!PackagerProcess.IsValid())
+		{
+			ShowStatus(FText::Format(
+				LOCTEXT("PackagerLaunchFailed", "Export complete, but NTE Mod Packager could not be started: {0}"),
+				FText::FromString(HTCookedAssetExporter::PackagerExecutable)), true);
+			return FReply::Handled();
+		}
+		FPlatformProcess::CloseProc(PackagerProcess);
+
+		ShowStatus(FText::Format(
+			LOCTEXT("ExportAndPackageSuccess", "Export complete: {0} assets, {1} files copied, {2} skipped. NTE Mod Packager started."),
+			FText::AsNumber(SelectedItems.Num()),
+			FText::AsNumber(CopiedFiles),
+			FText::AsNumber(SkippedFiles)));
+	}
+	else
+	{
+		ShowStatus(FText::Format(
+			LOCTEXT("ExportSuccess", "Export complete: {0} assets, {1} files copied, {2} skipped."),
+			FText::AsNumber(SelectedItems.Num()),
+			FText::AsNumber(CopiedFiles),
+			FText::AsNumber(SkippedFiles)));
+	}
 	return FReply::Handled();
 }
 
@@ -545,6 +606,16 @@ void SHTCookedAssetExporter::OnDirectoryTextCommitted(const FText& NewText, ETex
 	(void)NewText;
 	(void)CommitType;
 	SaveDirectories();
+}
+
+void SHTCookedAssetExporter::OnExportAndPackageCheckStateChanged(ECheckBoxState NewState)
+{
+	GConfig->SetBool(
+		HTCookedAssetExporter::ConfigSection,
+		HTCookedAssetExporter::ExportAndPackageKey,
+		NewState == ECheckBoxState::Checked,
+		GEditorPerProjectIni);
+	GConfig->Flush(false, GEditorPerProjectIni);
 }
 
 void SHTCookedAssetExporter::OnItemCheckStateChanged(ECheckBoxState NewState, TSharedPtr<FHTCookedAssetExportItem> Item)
