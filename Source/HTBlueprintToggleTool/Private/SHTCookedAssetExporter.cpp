@@ -1,5 +1,6 @@
 #include "SHTCookedAssetExporter.h"
 
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "DesktopPlatformModule.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -7,6 +8,8 @@
 #include "HAL/PlatformFileManager.h"
 #include "IDesktopPlatform.h"
 #include "Misc/App.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Styling/AppStyle.h"
 #include "Widgets/Images/SImage.h"
@@ -26,6 +29,10 @@
 
 namespace HTCookedAssetExporter
 {
+	static const TCHAR* ConfigSection = TEXT("HTBlueprintToggleTool.CookedAssetExporter");
+	static const TCHAR* SourceDirectoryKey = TEXT("CookedSourceDirectory");
+	static const TCHAR* OutputDirectoryKey = TEXT("OutputDirectory");
+
 	static FString NormalizeDirectory(FString Directory)
 	{
 		Directory.TrimStartAndEndInline();
@@ -50,11 +57,14 @@ namespace HTCookedAssetExporter
 
 void SHTCookedAssetExporter::Construct(const FArguments& InArgs)
 {
-	const FString DefaultCookedDirectory = FPaths::Combine(
+	FString CookedDirectory = FPaths::Combine(
 		FPaths::ProjectSavedDir(),
 		TEXT("Cooked/Windows"),
 		FApp::GetProjectName(),
 		TEXT("Content/Characters/Player"));
+	FString OutputDirectory;
+	GConfig->GetString(HTCookedAssetExporter::ConfigSection, HTCookedAssetExporter::SourceDirectoryKey, CookedDirectory, GEditorPerProjectIni);
+	GConfig->GetString(HTCookedAssetExporter::ConfigSection, HTCookedAssetExporter::OutputDirectoryKey, OutputDirectory, GEditorPerProjectIni);
 
 	ChildSlot
 	[
@@ -93,7 +103,8 @@ void SHTCookedAssetExporter::Construct(const FArguments& InArgs)
 				.Padding(0, 0, 6, 0)
 				[
 					SAssignNew(SourceDirectoryBox, SEditableTextBox)
-					.Text(FText::FromString(DefaultCookedDirectory))
+					.Text(FText::FromString(CookedDirectory))
+					.OnTextCommitted(this, &SHTCookedAssetExporter::OnDirectoryTextCommitted)
 				]
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
@@ -127,7 +138,9 @@ void SHTCookedAssetExporter::Construct(const FArguments& InArgs)
 				.Padding(0, 0, 6, 0)
 				[
 					SAssignNew(OutputDirectoryBox, SEditableTextBox)
+					.Text(FText::FromString(OutputDirectory))
 					.HintText(LOCTEXT("OutputHint", "Choose the character directory used by the external packager"))
+					.OnTextCommitted(this, &SHTCookedAssetExporter::OnDirectoryTextCommitted)
 				]
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
@@ -151,7 +164,7 @@ void SHTCookedAssetExporter::Construct(const FArguments& InArgs)
 				.Padding(0, 0, 8, 0)
 				[
 					SAssignNew(SearchBox, SSearchBox)
-					.HintText(LOCTEXT("SearchHint", "Filter cooked assets"))
+					.HintText(LOCTEXT("SearchHint", "Filter project assets"))
 					.OnTextChanged(this, &SHTCookedAssetExporter::OnSearchTextChanged)
 				]
 				+ SHorizontalBox::Slot()
@@ -228,7 +241,7 @@ void SHTCookedAssetExporter::Construct(const FArguments& InArgs)
 				.VAlign(VAlign_Center)
 				[
 					SAssignNew(ExportStatusText, STextBlock)
-					.Text(LOCTEXT("InitialStatus", "Choose a cooked character directory, then scan."))
+					.Text(LOCTEXT("InitialStatus", "Choose a cooked character directory. Its matching project assets will be listed."))
 					.AutoWrapText(true)
 				]
 				+ SHorizontalBox::Slot()
@@ -244,6 +257,15 @@ void SHTCookedAssetExporter::Construct(const FArguments& InArgs)
 	];
 
 	UpdateSelectionSummary();
+	if (IFileManager::Get().DirectoryExists(*HTCookedAssetExporter::NormalizeDirectory(CookedDirectory)))
+	{
+		ScanSourceDirectory();
+	}
+}
+
+SHTCookedAssetExporter::~SHTCookedAssetExporter()
+{
+	SaveDirectories();
 }
 
 FReply SHTCookedAssetExporter::OnBrowseSourceClicked()
@@ -252,6 +274,7 @@ FReply SHTCookedAssetExporter::OnBrowseSourceClicked()
 	if (ChooseDirectory(LOCTEXT("ChooseSource", "Choose cooked character directory"), GetSourceDirectory(), Directory))
 	{
 		SourceDirectoryBox->SetText(FText::FromString(Directory));
+		SaveDirectories();
 		ScanSourceDirectory();
 	}
 	return FReply::Handled();
@@ -263,6 +286,7 @@ FReply SHTCookedAssetExporter::OnBrowseOutputClicked()
 	if (ChooseDirectory(LOCTEXT("ChooseOutput", "Choose output directory"), GetOutputDirectory(), Directory))
 	{
 		OutputDirectoryBox->SetText(FText::FromString(Directory));
+		SaveDirectories();
 	}
 	return FReply::Handled();
 }
@@ -277,7 +301,7 @@ FReply SHTCookedAssetExporter::OnSelectAllClicked()
 {
 	for (const TSharedPtr<FHTCookedAssetExportItem>& Item : FilteredAssetItems)
 	{
-		Item->bSelected = true;
+		Item->bSelected = !Item->SourceFiles.IsEmpty();
 	}
 	AssetListView->RequestListRefresh();
 	UpdateSelectionSummary();
@@ -299,21 +323,22 @@ FReply SHTCookedAssetExporter::OnExportClicked()
 {
 	using namespace HTCookedAssetExporter;
 
-	const FString SourceDirectory = NormalizeDirectory(GetSourceDirectory());
-	const FString OutputDirectory = NormalizeDirectory(GetOutputDirectory());
-	if (!IFileManager::Get().DirectoryExists(*SourceDirectory))
-	{
-		ShowStatus(LOCTEXT("InvalidSource", "The cooked source directory does not exist."), true);
-		return FReply::Handled();
-	}
 	if (GetOutputDirectory().TrimStartAndEnd().IsEmpty())
 	{
 		ShowStatus(LOCTEXT("MissingOutput", "Choose an output directory."), true);
 		return FReply::Handled();
 	}
 
+	const FString SourceDirectory = NormalizeDirectory(GetSourceDirectory());
+	const FString OutputDirectory = NormalizeDirectory(GetOutputDirectory());
+	const FString ExportRootDirectory = GetExportRootDirectory(SourceDirectory, OutputDirectory);
+	if (!IFileManager::Get().DirectoryExists(*SourceDirectory))
+	{
+		ShowStatus(LOCTEXT("InvalidSource", "The cooked source directory does not exist."), true);
+		return FReply::Handled();
+	}
 	const FString SourcePrefix = SourceDirectory + TEXT("/");
-	if (OutputDirectory.Equals(SourceDirectory, ESearchCase::IgnoreCase) || OutputDirectory.StartsWith(SourcePrefix, ESearchCase::IgnoreCase))
+	if (ExportRootDirectory.Equals(SourceDirectory, ESearchCase::IgnoreCase) || ExportRootDirectory.StartsWith(SourcePrefix, ESearchCase::IgnoreCase))
 	{
 		ShowStatus(LOCTEXT("InvalidOutput", "The output directory cannot be the source directory or a child of it."), true);
 		return FReply::Handled();
@@ -329,7 +354,7 @@ FReply SHTCookedAssetExporter::OnExportClicked()
 	}
 	if (SelectedItems.IsEmpty())
 	{
-		ShowStatus(LOCTEXT("NothingSelected", "Select at least one cooked asset."), true);
+		ShowStatus(LOCTEXT("NothingSelected", "Select at least one available project asset."), true);
 		return FReply::Handled();
 	}
 
@@ -350,7 +375,7 @@ FReply SHTCookedAssetExporter::OnExportClicked()
 				continue;
 			}
 
-			const FString DestinationFile = FPaths::Combine(OutputDirectory, RelativeFile);
+			const FString DestinationFile = FPaths::Combine(ExportRootDirectory, RelativeFile);
 			PlatformFile.CreateDirectoryTree(*FPaths::GetPath(DestinationFile));
 			if (PlatformFile.FileExists(*DestinationFile))
 			{
@@ -411,20 +436,57 @@ void SHTCookedAssetExporter::ScanSourceDirectory()
 		return;
 	}
 
-	TArray<FString> UAssetFiles;
-	IFileManager::Get().FindFilesRecursive(UAssetFiles, *SourceDirectory, TEXT("*.uasset"), true, false, false);
-	UAssetFiles.Sort();
-	const FString SourcePrefix = SourceDirectory + TEXT("/");
-	const TCHAR* SidecarExtensions[] = { TEXT("uasset"), TEXT("uexp"), TEXT("ubulk"), TEXT("uptnl") };
+	FString ProjectAssetDirectory;
+	FString GamePath;
+	if (!GetProjectAssetDirectory(SourceDirectory, ProjectAssetDirectory, GamePath))
+	{
+		AssetListView->RequestListRefresh();
+		UpdateSelectionSummary();
+		ShowStatus(LOCTEXT("CannotMapProjectDirectory", "The cooked directory must be inside a Content folder so it can be mapped to the project."), true);
+		return;
+	}
+	if (!IFileManager::Get().DirectoryExists(*ProjectAssetDirectory))
+	{
+		AssetListView->RequestListRefresh();
+		UpdateSelectionSummary();
+		ShowStatus(FText::Format(LOCTEXT("MissingProjectDirectory", "Matching project directory does not exist: {0}"), FText::FromString(ProjectAssetDirectory)), true);
+		return;
+	}
 
-	for (const FString& UAssetFile : UAssetFiles)
+	TMap<FName, FString> AssetTypes;
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+	TArray<FAssetData> ProjectAssets;
+	AssetRegistryModule.Get().GetAssetsByPath(FName(*GamePath), ProjectAssets, true);
+	for (const FAssetData& AssetData : ProjectAssets)
+	{
+		AssetTypes.Add(AssetData.PackageName, AssetData.AssetClassPath.GetAssetName().ToString());
+	}
+
+	TArray<FString> ProjectUAssetFiles;
+	IFileManager::Get().FindFilesRecursive(ProjectUAssetFiles, *ProjectAssetDirectory, TEXT("*.uasset"), true, false, false);
+	ProjectUAssetFiles.Sort();
+	const FString ProjectPrefix = ProjectAssetDirectory + TEXT("/");
+	const TCHAR* SidecarExtensions[] = { TEXT("uasset"), TEXT("uexp"), TEXT("ubulk"), TEXT("uptnl") };
+	int32 CookedAssetCount = 0;
+
+	for (const FString& ProjectUAssetFile : ProjectUAssetFiles)
 	{
 		TSharedPtr<FHTCookedAssetExportItem> Item = MakeShared<FHTCookedAssetExportItem>();
-		Item->RelativeAssetPath = UAssetFile;
-		FPaths::MakePathRelativeTo(Item->RelativeAssetPath, *SourcePrefix);
+		Item->RelativeAssetPath = ProjectUAssetFile;
+		FPaths::MakePathRelativeTo(Item->RelativeAssetPath, *ProjectPrefix);
 		FPaths::MakeStandardFilename(Item->RelativeAssetPath);
 
-		const FString BasePath = FPaths::Combine(FPaths::GetPath(UAssetFile), FPaths::GetBaseFilename(UAssetFile));
+		FString PackageName;
+		if (FPackageName::TryConvertFilenameToLongPackageName(ProjectUAssetFile, PackageName))
+		{
+			if (const FString* FoundType = AssetTypes.Find(FName(*PackageName)))
+			{
+				Item->AssetType = *FoundType;
+			}
+		}
+
+		const FString CookedUAssetFile = FPaths::Combine(SourceDirectory, Item->RelativeAssetPath);
+		const FString BasePath = FPaths::Combine(FPaths::GetPath(CookedUAssetFile), FPaths::GetBaseFilename(CookedUAssetFile));
 		for (const TCHAR* Extension : SidecarExtensions)
 		{
 			const FString Candidate = BasePath + TEXT(".") + Extension;
@@ -434,12 +496,20 @@ void SHTCookedAssetExporter::ScanSourceDirectory()
 				Item->TotalSize += FMath::Max<int64>(0, IFileManager::Get().FileSize(*Candidate));
 			}
 		}
+		if (!Item->SourceFiles.IsEmpty())
+		{
+			++CookedAssetCount;
+		}
 
 		AssetItems.Add(Item);
 	}
 
 	ApplySearchFilter();
-	ShowStatus(FText::Format(LOCTEXT("ScanComplete", "Scan complete: {0} cooked assets found."), FText::AsNumber(AssetItems.Num())));
+	ShowStatus(FText::Format(
+		LOCTEXT("ScanComplete", "Found {0} project assets in {1}; {2} have cooked files available."),
+		FText::AsNumber(AssetItems.Num()),
+		FText::FromString(GamePath),
+		FText::AsNumber(CookedAssetCount)));
 }
 
 void SHTCookedAssetExporter::ApplySearchFilter()
@@ -465,11 +535,18 @@ void SHTCookedAssetExporter::OnSearchTextChanged(const FText& NewText)
 	ApplySearchFilter();
 }
 
+void SHTCookedAssetExporter::OnDirectoryTextCommitted(const FText& NewText, ETextCommit::Type CommitType)
+{
+	(void)NewText;
+	(void)CommitType;
+	SaveDirectories();
+}
+
 void SHTCookedAssetExporter::OnItemCheckStateChanged(ECheckBoxState NewState, TSharedPtr<FHTCookedAssetExportItem> Item)
 {
 	if (Item.IsValid())
 	{
-		Item->bSelected = NewState == ECheckBoxState::Checked;
+		Item->bSelected = !Item->SourceFiles.IsEmpty() && NewState == ECheckBoxState::Checked;
 		UpdateSelectionSummary();
 	}
 }
@@ -486,6 +563,7 @@ TSharedRef<ITableRow> SHTCookedAssetExporter::GenerateAssetRow(TSharedPtr<FHTCoo
 			.Padding(0, 0, 8, 0)
 			[
 				SNew(SCheckBox)
+				.IsEnabled(!Item->SourceFiles.IsEmpty())
 				.IsChecked_Lambda([Item]() { return Item->bSelected ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
 				.OnCheckStateChanged(this, &SHTCookedAssetExporter::OnItemCheckStateChanged, Item)
 			]
@@ -494,7 +572,9 @@ TSharedRef<ITableRow> SHTCookedAssetExporter::GenerateAssetRow(TSharedPtr<FHTCoo
 			.VAlign(VAlign_Center)
 			[
 				SNew(STextBlock)
-				.Text(FText::FromString(Item->RelativeAssetPath))
+				.Text(FText::FromString(Item->AssetType.IsEmpty()
+					? Item->RelativeAssetPath
+					: FString::Printf(TEXT("%s  [%s]"), *Item->RelativeAssetPath, *Item->AssetType)))
 				.ToolTipText(FText::FromString(Item->RelativeAssetPath))
 			]
 			+ SHorizontalBox::Slot()
@@ -503,10 +583,12 @@ TSharedRef<ITableRow> SHTCookedAssetExporter::GenerateAssetRow(TSharedPtr<FHTCoo
 			.Padding(12, 0, 0, 0)
 			[
 				SNew(STextBlock)
-				.Text(FText::Format(
-					LOCTEXT("AssetDetails", "{0} files | {1}"),
-					FText::AsNumber(Item->SourceFiles.Num()),
-					FText::FromString(HTCookedAssetExporter::FormatFileSize(Item->TotalSize))))
+				.Text(Item->SourceFiles.IsEmpty()
+					? LOCTEXT("NotCooked", "Not cooked")
+					: FText::Format(
+						LOCTEXT("AssetDetails", "{0} files | {1}"),
+						FText::AsNumber(Item->SourceFiles.Num()),
+						FText::FromString(HTCookedAssetExporter::FormatFileSize(Item->TotalSize))))
 				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 			]
 		];
@@ -566,6 +648,52 @@ FString SHTCookedAssetExporter::GetSourceDirectory() const
 FString SHTCookedAssetExporter::GetOutputDirectory() const
 {
 	return OutputDirectoryBox.IsValid() ? OutputDirectoryBox->GetText().ToString() : FString();
+}
+
+bool SHTCookedAssetExporter::GetProjectAssetDirectory(const FString& CookedSourceDirectory, FString& OutProjectDirectory, FString& OutGamePath) const
+{
+	FString StandardSource = CookedSourceDirectory;
+	FPaths::MakeStandardFilename(StandardSource);
+	const FString ContentMarker = TEXT("/Content/");
+	const int32 ContentIndex = StandardSource.Find(ContentMarker, ESearchCase::IgnoreCase, ESearchDir::FromStart);
+	if (ContentIndex == INDEX_NONE)
+	{
+		return false;
+	}
+
+	const FString ContentRelativePath = StandardSource.Mid(ContentIndex + ContentMarker.Len());
+	if (ContentRelativePath.IsEmpty())
+	{
+		return false;
+	}
+
+	OutProjectDirectory = FPaths::Combine(FPaths::ProjectContentDir(), ContentRelativePath);
+	FPaths::NormalizeDirectoryName(OutProjectDirectory);
+	OutGamePath = TEXT("/Game/") + ContentRelativePath;
+	FPaths::MakeStandardFilename(OutGamePath);
+	return true;
+}
+
+FString SHTCookedAssetExporter::GetExportRootDirectory(const FString& CookedSourceDirectory, const FString& OutputDirectory) const
+{
+	const FString CharacterDirectoryName = FPaths::GetCleanFilename(CookedSourceDirectory);
+	if (FPaths::GetCleanFilename(OutputDirectory).Equals(CharacterDirectoryName, ESearchCase::IgnoreCase))
+	{
+		return OutputDirectory;
+	}
+	return FPaths::Combine(OutputDirectory, CharacterDirectoryName);
+}
+
+void SHTCookedAssetExporter::SaveDirectories() const
+{
+	if (!GConfig)
+	{
+		return;
+	}
+
+	GConfig->SetString(HTCookedAssetExporter::ConfigSection, HTCookedAssetExporter::SourceDirectoryKey, *GetSourceDirectory(), GEditorPerProjectIni);
+	GConfig->SetString(HTCookedAssetExporter::ConfigSection, HTCookedAssetExporter::OutputDirectoryKey, *GetOutputDirectory(), GEditorPerProjectIni);
+	GConfig->Flush(false, GEditorPerProjectIni);
 }
 
 bool SHTCookedAssetExporter::ChooseDirectory(const FText& DialogTitle, const FString& DefaultPath, FString& OutDirectory) const
