@@ -14,6 +14,7 @@ template <typename ItemType> class SListView;
 struct FHTCookedAssetExportItem
 {
 	FString RelativeAssetPath;
+	FString AssetType;
 	TArray<FString> SourceFiles;
 	int64 TotalSize = 0;
 	bool bSelected = false;
@@ -26,6 +27,7 @@ public:
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
+	virtual ~SHTCookedAssetExporter() override;
 
 private:
 	FReply OnBrowseSourceClicked();
@@ -38,12 +40,16 @@ private:
 	void ScanSourceDirectory();
 	void ApplySearchFilter();
 	void OnSearchTextChanged(const FText& NewText);
+	void OnDirectoryTextCommitted(const FText& NewText, ETextCommit::Type CommitType);
 	void OnItemCheckStateChanged(ECheckBoxState NewState, TSharedPtr<FHTCookedAssetExportItem> Item);
 	TSharedRef<ITableRow> GenerateAssetRow(TSharedPtr<FHTCookedAssetExportItem> Item, const TSharedRef<STableViewBase>& OwnerTable);
 	void UpdateSelectionSummary();
 	void ShowStatus(const FText& Text, bool bError = false) const;
 	FString GetSourceDirectory() const;
 	FString GetOutputDirectory() const;
+	bool GetProjectAssetDirectory(const FString& CookedSourceDirectory, FString& OutProjectDirectory, FString& OutGamePath) const;
+	FString GetExportRootDirectory(const FString& CookedSourceDirectory, const FString& OutputDirectory) const;
+	void SaveDirectories() const;
 	bool ChooseDirectory(const FText& DialogTitle, const FString& DefaultPath, FString& OutDirectory) const;
 
 	TArray<TSharedPtr<FHTCookedAssetExportItem>> AssetItems;

@@ -7,7 +7,7 @@
 ## 功能
 
 - 在编辑器菜单 `Tools > HT Blueprint Toggle Tool` 打开工具面板。
-- 主面板右上角提供 `Cooked Assets` 入口，可以从烘焙目录选择需要的角色资产并复制到外部打包目录。
+- 主面板右上角提供 `Cooked Assets` 入口，可以按工程中的原始资产选择需要复制的烘焙文件。
 - 右上角 `Settings` 设置窗口可以直接从工程里选择蓝图资产：
   - Anim Blueprint
   - SaveGame Blueprint
@@ -28,8 +28,10 @@
   - Save Slot：`AnimVariable`
 - `Section Index` 和 `LOD Index` 默认固定为 `0`。
 - 生成的节点会按区域排布，并放进注释框，方便后续查看和移动。
-- 烘焙资产导出时以 `.uasset` 为选择单位，并自动携带同名 `.uexp`、`.ubulk`、`.uptnl` 文件。
-- 导出会保留资产在烘焙目录下的相对文件夹结构，不会自动复制未勾选的骨骼、物理资产或材质实例。
+- 烘焙源目录和输出目录会保存在当前工程的编辑器配置中，关闭窗口或重启 UE 后仍会保留。
+- 资产列表来自工程中与 Cooked 目录对应的 `Content` 文件夹，并显示资产类型；尚未烘焙的资产会标记为 `Not cooked`。
+- 烘焙资产导出时以工程 `.uasset` 为选择单位，并自动携带同名 `.uexp`、`.ubulk`、`.uptnl` 文件。
+- 导出会保留角色文件夹和内部子目录结构，不会自动复制未勾选的骨骼、物理资产或材质实例。
 
 ## 环境要求
 
@@ -46,7 +48,7 @@ Release 包里包含 UE 5.6 Win64 的预编译插件 DLL。自定义 Binary zip 
 2. 下载插件 zip 附件：
 
    ```text
-   HTBlueprintToggleTool-v1.2.0-UE5.6-Win64-Binary.zip
+   HTBlueprintToggleTool-v1.2.1-UE5.6-Win64-Binary.zip
    ```
 
 3. 安装插件时不要下载 GitHub 自动生成的 `Source code (zip)` 或 `Source code (tar.gz)`，请下载上面的 Binary zip 附件。
@@ -98,9 +100,17 @@ Release 包里包含 UE 5.6 Win64 的预编译插件 DLL。自定义 Binary zip 
    Saved/Cooked/Windows/HT/Content/Characters/Player/010_nanally
    ```
 
-3. `Output directory` 选择外部打包器中的角色目录。
-4. 点击 `Scan`，在列表中勾选需要打包的 `.uasset`。
-5. 点击 `Export selected assets`。
+3. `Output directory` 选择外部打包器中的角色父目录，例如 `.../Content/Characters`。
+4. 插件会把 Cooked 路径映射到工程对应的 `Content` 文件夹，并在列表中显示工程资产及其类型。
+5. 在列表中勾选需要打包的工程资产；没有对应烘焙文件的项目会显示 `Not cooked`。
+6. 点击 `Export selected assets`。
+
+两个目录会自动保存，关闭窗口或重启编辑器后不会重置。输出时会自动建立角色目录，例如：
+
+```text
+输出目录/010_nanally/nanally_animbp.uasset
+输出目录/010_nanally/NEW_ter/ter/cloth_ter/T_player_010_nanally_01_d.uasset
+```
 
 选择一个 `.uasset` 时，插件会自动复制同名伴随文件。例如选择：
 
