@@ -1450,20 +1450,6 @@ namespace HTToggleGenerator
 		Connect(FindAnyPin(GetAnimDefault, ToggleVariable), FindAnyPin(SetSaveDefault, SaveVariable), Result, TEXT("Anim default -> Save default"));
 		Connect(GetSchema()->FindExecutionPin(*SetSaveDefault, EGPD_Output), GetSchema()->FindExecutionPin(*SaveDefaultSlot, EGPD_Input), Result, TEXT("Set Save default -> SaveGameToSlot"));
 		Connect(FindAnyPin(CreateSave, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SaveDefaultSlot, TEXT("SaveGameObject")), Result, TEXT("CreateSave Return -> SaveGameToSlot"));
-		if (Params.Mode == EHTBlueprintToggleMode::Texture)
-		{
-			AddApplyToggleNodes(
-				Graph,
-				Params,
-				MIDVariables,
-				Textures,
-				GetSchema()->FindExecutionPin(*SaveDefaultSlot, EGPD_Output),
-				FindAnyPin(GetAnimDefault, ToggleVariable),
-				FVector2D(1040 + FlowOffsetX, FalseY),
-				Result,
-				&MaterialNodes);
-		}
-
 		const float CommentHeight = Params.Mode == EHTBlueprintToggleMode::Texture
 			? FMath::Max(1800.0f, 1000.0f + Textures.Num() * 360.0f)
 			: 1800.0f;
