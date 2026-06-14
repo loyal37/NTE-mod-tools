@@ -10,6 +10,7 @@
 #include "EdGraphSchema_K2.h"
 #include "EdGraphSchema_K2_Actions.h"
 #include "Engine/Blueprint.h"
+#include "Engine/Texture.h"
 #include "FileHelpers.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SaveGame.h"
@@ -27,6 +28,7 @@
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/PackageName.h"
 #include "ScopedTransaction.h"
 #include "UObject/Package.h"
@@ -84,6 +86,25 @@ namespace HTToggleGenerator
 			Result.Errors.Add(FString::Printf(TEXT("%s 加载失败: %s"), *Label, *Path));
 		}
 		return Blueprint;
+	}
+
+	static UTexture* LoadTexture(const FString& RawPath, FHTBlueprintToggleGeneratorResult& Result, const FString& Label)
+	{
+		const FString Path = NormalizeAssetPath(RawPath);
+		UObject* Object = StaticLoadObject(UTexture::StaticClass(), nullptr, *Path);
+
+		if (!Object && Path.StartsWith(TEXT("/Game/")) && !Path.Contains(TEXT(".")))
+		{
+			const FString ObjectPath = Path + TEXT(".") + FPackageName::GetLongPackageAssetName(Path);
+			Object = StaticLoadObject(UTexture::StaticClass(), nullptr, *ObjectPath);
+		}
+
+		UTexture* Texture = Cast<UTexture>(Object);
+		if (!Texture)
+		{
+			Result.Errors.Add(FString::Printf(TEXT("%s could not be loaded: %s"), *Label, *Path));
+		}
+		return Texture;
 	}
 
 	static FName ToName(const FString& RawValue, const TCHAR* Fallback)
@@ -482,6 +503,49 @@ namespace HTToggleGenerator
 		}
 
 		Result.Messages.Add(FString::Printf(TEXT("%s 已添加 int 变量: %s"), *Label, *VariableName.ToString()));
+		return true;
+	}
+
+	static bool EnsureObjectVariable(UBlueprint* Blueprint, const FName VariableName, UClass* ObjectClass, FHTBlueprintToggleGeneratorResult& Result, const FString& Label)
+	{
+		if (!Blueprint || !ObjectClass)
+		{
+			return false;
+		}
+
+		const int32 VariableIndex = FBlueprintEditorUtils::FindNewVariableIndex(Blueprint, VariableName);
+		if (VariableIndex != INDEX_NONE)
+		{
+			const FEdGraphPinType& ExistingType = Blueprint->NewVariables[VariableIndex].VarType;
+			if (ExistingType.PinCategory != UEdGraphSchema_K2::PC_Object || ExistingType.PinSubCategoryObject.Get() != ObjectClass)
+			{
+				Result.Errors.Add(FString::Printf(TEXT("%s variable has the wrong type: %s"), *Label, *VariableName.ToString()));
+				return false;
+			}
+			Result.Messages.Add(FString::Printf(TEXT("%s variable already exists: %s"), *Label, *VariableName.ToString()));
+			return true;
+		}
+
+		if (FObjectPropertyBase* ExistingProperty = Blueprint->SkeletonGeneratedClass ? FindFProperty<FObjectPropertyBase>(Blueprint->SkeletonGeneratedClass, VariableName) : nullptr)
+		{
+			if (!ExistingProperty->PropertyClass || !ExistingProperty->PropertyClass->IsChildOf(ObjectClass))
+			{
+				Result.Errors.Add(FString::Printf(TEXT("%s variable has the wrong type: %s"), *Label, *VariableName.ToString()));
+				return false;
+			}
+			return true;
+		}
+
+		FEdGraphPinType PinType;
+		PinType.PinCategory = UEdGraphSchema_K2::PC_Object;
+		PinType.PinSubCategoryObject = ObjectClass;
+		if (!FBlueprintEditorUtils::AddMemberVariable(Blueprint, VariableName, PinType))
+		{
+			Result.Errors.Add(FString::Printf(TEXT("Failed to add %s variable: %s"), *Label, *VariableName.ToString()));
+			return false;
+		}
+
+		Result.Messages.Add(FString::Printf(TEXT("Added %s variable: %s"), *Label, *VariableName.ToString()));
 		return true;
 	}
 
@@ -945,6 +1009,10 @@ namespace HTToggleGenerator
 
 	static int32 GetCycleStateCount(const FHTBlueprintToggleGeneratorParams& Params)
 	{
+		if (Params.Mode == EHTBlueprintToggleMode::Texture)
+		{
+			return 2;
+		}
 		const TArray<int32> MaterialIDs = GetMaterialIDs(Params);
 		return MaterialIDs.Num() > 1 ? MaterialIDs.Num() + 1 : 2;
 	}
@@ -1116,13 +1184,78 @@ namespace HTToggleGenerator
 		return AddApplySingleMaterialNodes(Graph, Params, MaterialIDs[0], ExecIn, ValuePin, Base, Result, OutNodes);
 	}
 
+	static UEdGraphPin* AddApplyTextureNodes(
+		UEdGraph* Graph,
+		const FHTBlueprintToggleGeneratorParams& Params,
+		const FName MIDVariable,
+		UTexture* TextureA,
+		UTexture* TextureB,
+		UEdGraphPin* ExecIn,
+		UEdGraphPin* ValuePin,
+		const FVector2D Base,
+		FHTBlueprintToggleGeneratorResult& Result,
+		TArray<UEdGraphNode*>* OutNodes)
+	{
+		UK2Node_SwitchInteger* SwitchNode = SpawnSwitchOnInt(Graph, Base, 2);
+		UK2Node_VariableGet* GetMID = SpawnVariableGet(Graph, MIDVariable, nullptr, Base + FVector2D(-100, 420));
+		UK2Node_CallFunction* SetTextureA = SpawnCall(Graph, UMaterialInstanceDynamic::StaticClass(), TEXT("SetTextureParameterValue"), Base + FVector2D(680, -80), Result);
+		UK2Node_CallFunction* SetTextureB = SpawnCall(Graph, UMaterialInstanceDynamic::StaticClass(), TEXT("SetTextureParameterValue"), Base + FVector2D(680, 300), Result);
+
+		if (!SwitchNode || !GetMID || !SetTextureA || !SetTextureB)
+		{
+			return nullptr;
+		}
+
+		AddNodeToList(OutNodes, SwitchNode);
+		AddNodeToList(OutNodes, GetMID);
+		AddNodeToList(OutNodes, SetTextureA);
+		AddNodeToList(OutNodes, SetTextureB);
+
+		SetDefaultValue(FindAnyPin(SetTextureA, TEXT("ParameterName")), Params.TextureParameterName);
+		SetDefaultValue(FindAnyPin(SetTextureB, TEXT("ParameterName")), Params.TextureParameterName);
+		SetDefaultObject(FindAnyPin(SetTextureA, TEXT("Value")), TextureA);
+		SetDefaultObject(FindAnyPin(SetTextureB, TEXT("Value")), TextureB);
+
+		Connect(ExecIn, GetSchema()->FindExecutionPin(*SwitchNode, EGPD_Input), Result, TEXT("Exec -> Texture Switch on Int"));
+		Connect(ValuePin, FindAnyPin(SwitchNode, TEXT("Selection")), Result, TEXT("Texture state -> Switch Selection"));
+		Connect(FindPin(SwitchNode, TEXT("0"), EGPD_Output), GetSchema()->FindExecutionPin(*SetTextureA, EGPD_Input), Result, TEXT("Switch 0 -> Texture A"));
+		Connect(FindPin(SwitchNode, TEXT("1"), EGPD_Output), GetSchema()->FindExecutionPin(*SetTextureB, EGPD_Input), Result, TEXT("Switch 1 -> Texture B"));
+		Connect(FindAnyPin(GetMID, MIDVariable), FindSelfPin(SetTextureA), Result, TEXT("MID -> Texture A Target"));
+		Connect(FindAnyPin(GetMID, MIDVariable), FindSelfPin(SetTextureB), Result, TEXT("MID -> Texture B Target"));
+
+		return GetSchema()->FindExecutionPin(*SetTextureB, EGPD_Output);
+	}
+
+	static UEdGraphPin* AddApplyToggleNodes(
+		UEdGraph* Graph,
+		const FHTBlueprintToggleGeneratorParams& Params,
+		const FName MIDVariable,
+		UTexture* TextureA,
+		UTexture* TextureB,
+		UEdGraphPin* ExecIn,
+		UEdGraphPin* ValuePin,
+		const FVector2D Base,
+		FHTBlueprintToggleGeneratorResult& Result,
+		TArray<UEdGraphNode*>* OutNodes = nullptr)
+	{
+		if (Params.Mode == EHTBlueprintToggleMode::Texture)
+		{
+			return AddApplyTextureNodes(Graph, Params, MIDVariable, TextureA, TextureB, ExecIn, ValuePin, Base, Result, OutNodes);
+		}
+
+		return AddApplyMaterialNodes(Graph, Params, ExecIn, ValuePin, Base, Result, OutNodes);
+	}
+
 	static void GenerateInitializeGraph(
 		UBlueprint* AnimBlueprint,
 		UClass* SaveClass,
 		const FName ToggleVariable,
 		const FName SaveVariable,
+		const FName MIDVariable,
 		const FString& SlotName,
 		const FHTBlueprintToggleGeneratorParams& Params,
+		UTexture* TextureA,
+		UTexture* TextureB,
 		const int32 BaseY,
 		FHTBlueprintToggleGeneratorResult& Result)
 	{
@@ -1141,18 +1274,19 @@ namespace HTToggleGenerator
 
 		const int32 TrueY = BaseY - 280;
 		const int32 FalseY = BaseY + 470;
+		const int32 FlowOffsetX = Params.Mode == EHTBlueprintToggleMode::Texture ? 900 : 0;
 
-		UK2Node_CallFunction* DoesSaveExist = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("DoesSaveGameExist"), FVector2D(-960, BaseY), Result);
-		UK2Node_IfThenElse* Branch = SpawnBranch(Graph, FVector2D(-620, BaseY));
-		UK2Node_CallFunction* LoadGame = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("LoadGameFromSlot"), FVector2D(-260, TrueY), Result);
-		UK2Node_DynamicCast* CastSave = SpawnCast(Graph, SaveClass, FVector2D(100, TrueY));
-		UK2Node_VariableGet* GetSaveValue = SpawnVariableGet(Graph, SaveVariable, SaveClass, FVector2D(420, TrueY + 130));
-		UK2Node_VariableSet* SetAnimValue = SpawnVariableSet(Graph, ToggleVariable, nullptr, FVector2D(700, TrueY));
+		UK2Node_CallFunction* DoesSaveExist = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("DoesSaveGameExist"), FVector2D(-960 + FlowOffsetX, BaseY), Result);
+		UK2Node_IfThenElse* Branch = SpawnBranch(Graph, FVector2D(-620 + FlowOffsetX, BaseY));
+		UK2Node_CallFunction* LoadGame = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("LoadGameFromSlot"), FVector2D(-260 + FlowOffsetX, TrueY), Result);
+		UK2Node_DynamicCast* CastSave = SpawnCast(Graph, SaveClass, FVector2D(100 + FlowOffsetX, TrueY));
+		UK2Node_VariableGet* GetSaveValue = SpawnVariableGet(Graph, SaveVariable, SaveClass, FVector2D(420 + FlowOffsetX, TrueY + 130));
+		UK2Node_VariableSet* SetAnimValue = SpawnVariableSet(Graph, ToggleVariable, nullptr, FVector2D(700 + FlowOffsetX, TrueY));
 
-		UK2Node_CallFunction* CreateSave = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("CreateSaveGameObject"), FVector2D(-260, FalseY), Result);
-		UK2Node_VariableGet* GetAnimDefault = SpawnVariableGet(Graph, ToggleVariable, nullptr, FVector2D(100, FalseY + 170));
-		UK2Node_VariableSet* SetSaveDefault = SpawnVariableSet(Graph, SaveVariable, SaveClass, FVector2D(420, FalseY));
-		UK2Node_CallFunction* SaveDefaultSlot = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("SaveGameToSlot"), FVector2D(760, FalseY), Result);
+		UK2Node_CallFunction* CreateSave = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("CreateSaveGameObject"), FVector2D(-260 + FlowOffsetX, FalseY), Result);
+		UK2Node_VariableGet* GetAnimDefault = SpawnVariableGet(Graph, ToggleVariable, nullptr, FVector2D(100 + FlowOffsetX, FalseY + 170));
+		UK2Node_VariableSet* SetSaveDefault = SpawnVariableSet(Graph, SaveVariable, SaveClass, FVector2D(420 + FlowOffsetX, FalseY));
+		UK2Node_CallFunction* SaveDefaultSlot = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("SaveGameToSlot"), FVector2D(760 + FlowOffsetX, FalseY), Result);
 
 		if (!DoesSaveExist || !Branch || !LoadGame || !CastSave || !GetSaveValue || !SetAnimValue || !CreateSave || !GetAnimDefault || !SetSaveDefault || !SaveDefaultSlot)
 		{
@@ -1164,7 +1298,28 @@ namespace HTToggleGenerator
 		ConfigureSaveSlotPins(SaveDefaultSlot, SlotName);
 		SetDefaultObject(FindAnyPin(CreateSave, TEXT("SaveGameClass")), SaveClass);
 
-		Connect(EntryExec, GetSchema()->FindExecutionPin(*DoesSaveExist, EGPD_Input), Result, TEXT("Init entry -> DoesSaveGameExist"));
+		UEdGraphPin* SaveFlowEntry = EntryExec;
+		TArray<UEdGraphNode*> SetupNodes;
+		if (Params.Mode == EHTBlueprintToggleMode::Texture)
+		{
+			UK2Node_CallFunction* GetOwningForMID = SpawnCall(Graph, UAnimInstance::StaticClass(), TEXT("GetOwningComponent"), FVector2D(-1460, BaseY + 380), Result);
+			UK2Node_CallFunction* CreateMID = SpawnCall(Graph, UPrimitiveComponent::StaticClass(), TEXT("CreateDynamicMaterialInstance"), FVector2D(-1200, BaseY), Result);
+			UK2Node_VariableSet* SetMID = SpawnVariableSet(Graph, MIDVariable, nullptr, FVector2D(-820, BaseY));
+			if (!GetOwningForMID || !CreateMID || !SetMID)
+			{
+				return;
+			}
+
+			SetDefaultValue(FindAnyPin(CreateMID, TEXT("ElementIndex")), FString::FromInt(Params.MaterialElementIndex));
+			Connect(EntryExec, GetSchema()->FindExecutionPin(*CreateMID, EGPD_Input), Result, TEXT("Init entry -> Create MID"));
+			Connect(FindAnyPin(GetOwningForMID, UEdGraphSchema_K2::PN_ReturnValue), FindSelfPin(CreateMID), Result, TEXT("Owning Component -> Create MID Target"));
+			Connect(FindAnyPin(CreateMID, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SetMID, MIDVariable), Result, TEXT("Create MID -> MID variable"));
+			Connect(GetSchema()->FindExecutionPin(*CreateMID, EGPD_Output), GetSchema()->FindExecutionPin(*SetMID, EGPD_Input), Result, TEXT("Create MID -> Set MID"));
+			SaveFlowEntry = GetSchema()->FindExecutionPin(*SetMID, EGPD_Output);
+			SetupNodes = { GetOwningForMID, CreateMID, SetMID };
+		}
+
+		Connect(SaveFlowEntry, GetSchema()->FindExecutionPin(*DoesSaveExist, EGPD_Input), Result, TEXT("Init entry -> DoesSaveGameExist"));
 		Connect(GetSchema()->FindExecutionPin(*DoesSaveExist, EGPD_Output), GetSchema()->FindExecutionPin(*Branch, EGPD_Input), Result, TEXT("DoesSaveGameExist -> Branch"));
 		Connect(FindAnyPin(DoesSaveExist, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(Branch, UEdGraphSchema_K2::PN_Condition), Result, TEXT("DoesSaveGameExist Return -> Branch Condition"));
 
@@ -1177,7 +1332,7 @@ namespace HTToggleGenerator
 
 		TArray<UEdGraphNode*> MaterialNodes;
 		UEdGraphPin* SetAnimThen = GetSchema()->FindExecutionPin(*SetAnimValue, EGPD_Output);
-		AddApplyMaterialNodes(Graph, Params, SetAnimThen, FindSetOutputPin(SetAnimValue), FVector2D(1040, TrueY), Result, &MaterialNodes);
+		AddApplyToggleNodes(Graph, Params, MIDVariable, TextureA, TextureB, SetAnimThen, FindSetOutputPin(SetAnimValue), FVector2D(1040 + FlowOffsetX, TrueY), Result, &MaterialNodes);
 
 		Connect(FindAnyPin(Branch, UEdGraphSchema_K2::PN_Else), GetSchema()->FindExecutionPin(*CreateSave, EGPD_Input), Result, TEXT("Init false -> CreateSaveGame"));
 		Connect(GetSchema()->FindExecutionPin(*CreateSave, EGPD_Output), GetSchema()->FindExecutionPin(*SetSaveDefault, EGPD_Input), Result, TEXT("CreateSave -> Set Save default"));
@@ -1185,14 +1340,29 @@ namespace HTToggleGenerator
 		Connect(FindAnyPin(GetAnimDefault, ToggleVariable), FindAnyPin(SetSaveDefault, SaveVariable), Result, TEXT("Anim default -> Save default"));
 		Connect(GetSchema()->FindExecutionPin(*SetSaveDefault, EGPD_Output), GetSchema()->FindExecutionPin(*SaveDefaultSlot, EGPD_Input), Result, TEXT("Set Save default -> SaveGameToSlot"));
 		Connect(FindAnyPin(CreateSave, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SaveDefaultSlot, TEXT("SaveGameObject")), Result, TEXT("CreateSave Return -> SaveGameToSlot"));
+		if (Params.Mode == EHTBlueprintToggleMode::Texture)
+		{
+			AddApplyToggleNodes(
+				Graph,
+				Params,
+				MIDVariable,
+				TextureA,
+				TextureB,
+				GetSchema()->FindExecutionPin(*SaveDefaultSlot, EGPD_Output),
+				FindAnyPin(GetAnimDefault, ToggleVariable),
+				FVector2D(1040 + FlowOffsetX, FalseY),
+				Result,
+				&MaterialNodes);
+		}
 
 		UEdGraphNode_Comment* Comment = SpawnCommentBox(
 			Graph,
 			FString::Printf(TEXT("HT Init - %s"), *ToggleVariable.ToString()),
-			FVector2D(-1030, BaseY - 560),
-			FVector2D(5600, 1800),
+			FVector2D(-1500, BaseY - 560),
+			FVector2D(Params.Mode == EHTBlueprintToggleMode::Texture ? 7000 : 6100, 1800),
 			FLinearColor(0.08f, 0.22f, 0.34f, 1.0f));
 		TArray<UEdGraphNode*> CommentNodes = { DoesSaveExist, Branch, LoadGame, CastSave, GetSaveValue, SetAnimValue, CreateSave, GetAnimDefault, SetSaveDefault, SaveDefaultSlot };
+		CommentNodes.Append(SetupNodes);
 		CommentNodes.Append(MaterialNodes);
 		AddNodesToComment(Comment, CommentNodes);
 	}
@@ -1202,8 +1372,11 @@ namespace HTToggleGenerator
 		UClass* SaveClass,
 		const FName ToggleVariable,
 		const FName SaveVariable,
+		const FName MIDVariable,
 		const FString& SlotName,
 		const FHTBlueprintToggleGeneratorParams& Params,
+		UTexture* TextureA,
+		UTexture* TextureB,
 		const int32 BaseY,
 		FHTBlueprintToggleGeneratorResult& Result)
 	{
@@ -1316,7 +1489,7 @@ namespace HTToggleGenerator
 
 		TArray<UEdGraphNode*> MaterialNodes;
 		UEdGraphPin* SaveThen = GetSchema()->FindExecutionPin(*SaveSlot, EGPD_Output);
-		AddApplyMaterialNodes(Graph, Params, SaveThen, FindSetOutputPin(SetAnimValue), FVector2D(2900, BaseY), Result, &MaterialNodes);
+		AddApplyToggleNodes(Graph, Params, MIDVariable, TextureA, TextureB, SaveThen, FindSetOutputPin(SetAnimValue), FVector2D(2900, BaseY), Result, &MaterialNodes);
 
 		UEdGraphNode_Comment* Comment = SpawnCommentBox(
 			Graph,
@@ -1389,6 +1562,7 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 	SaveBlueprint->Modify();
 
 	const FName ToggleVariable = ToName(Params.ToggleVariableName, TEXT("Glove"));
+	const FName MIDVariable = FName(*(ToggleVariable.ToString() + TEXT("MID")));
 	const FString RawSaveVariableName = Trimmed(Params.SaveVariableName);
 	const FName SaveVariable = RawSaveVariableName.IsEmpty()
 		? FName(*(ToggleVariable.ToString() + TEXT("Save")))
@@ -1399,8 +1573,42 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 		SlotName = ToggleVariable.ToString();
 	}
 
+	UTexture* TextureA = nullptr;
+	UTexture* TextureB = nullptr;
+	if (Params.Mode == EHTBlueprintToggleMode::Texture)
+	{
+		if (!Params.bGenerateInitializeGraph)
+		{
+			Result.Errors.Add(TEXT("Texture switch mode requires the Initialize graph."));
+			return Result;
+		}
+		if (Params.MaterialElementIndex < 0)
+		{
+			Result.Errors.Add(TEXT("Material Slot must be zero or greater."));
+			return Result;
+		}
+		if (Trimmed(Params.TextureParameterName).IsEmpty())
+		{
+			Result.Errors.Add(TEXT("Texture Parameter cannot be empty."));
+			return Result;
+		}
+
+		TextureA = LoadTexture(Params.TextureAPath, Result, TEXT("Texture A"));
+		TextureB = LoadTexture(Params.TextureBPath, Result, TEXT("Texture B"));
+		if (!TextureA || !TextureB)
+		{
+			return Result;
+		}
+	}
+
 	EnsureIntVariable(AnimBlueprint, ToggleVariable, Result, TEXT("动画蓝图"));
 	EnsureIntVariable(SaveBlueprint, SaveVariable, Result, TEXT("SaveGame 蓝图"));
+
+	if (Params.Mode == EHTBlueprintToggleMode::Texture &&
+		!EnsureObjectVariable(AnimBlueprint, MIDVariable, UMaterialInstanceDynamic::StaticClass(), Result, TEXT("Animation Blueprint MID")))
+	{
+		return Result;
+	}
 
 	FKismetEditorUtilities::CompileBlueprint(SaveBlueprint);
 	FKismetEditorUtilities::CompileBlueprint(AnimBlueprint);
@@ -1422,19 +1630,27 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 
 	if (Params.bGenerateInitializeGraph)
 	{
-		GenerateInitializeGraph(AnimBlueprint, SaveClass, ToggleVariable, SaveVariable, SlotName, Params, NextLayoutBaseY, Result);
+		GenerateInitializeGraph(AnimBlueprint, SaveClass, ToggleVariable, SaveVariable, MIDVariable, SlotName, Params, TextureA, TextureB, NextLayoutBaseY, Result);
 		NextLayoutBaseY += 1600;
 	}
 
 	if (Params.bGenerateUpdateGraph)
 	{
-		GenerateUpdateGraph(AnimBlueprint, SaveClass, ToggleVariable, SaveVariable, SlotName, Params, NextLayoutBaseY, Result);
+		GenerateUpdateGraph(AnimBlueprint, SaveClass, ToggleVariable, SaveVariable, MIDVariable, SlotName, Params, TextureA, TextureB, NextLayoutBaseY, Result);
 	}
 
 	FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBlueprint);
 	FBlueprintEditorUtils::MarkBlueprintAsModified(SaveBlueprint);
 	FKismetEditorUtilities::CompileBlueprint(SaveBlueprint);
 	FKismetEditorUtilities::CompileBlueprint(AnimBlueprint);
+	if (SaveBlueprint->Status == BS_Error)
+	{
+		Result.Errors.Add(TEXT("The SaveGame Blueprint has compile errors after generation."));
+	}
+	if (AnimBlueprint->Status == BS_Error)
+	{
+		Result.Errors.Add(TEXT("The Animation Blueprint has compile errors after generation."));
+	}
 
 	if (Params.bSaveAssets)
 	{
