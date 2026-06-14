@@ -22,6 +22,7 @@ struct FHTBlueprintToggleGeneratorParams
 	int32 SectionIndex = 0;
 	int32 LODIndex = 0;
 	int32 MaterialElementIndex = 0;
+	TArray<int32> MaterialElementIndices;
 	FString SourceMaterialPath;
 	FString TextureParameterName;
 	TArray<FString> TexturePaths;

@@ -1027,6 +1027,30 @@ namespace HTToggleGenerator
 		return MaterialIDs;
 	}
 
+	static TArray<int32> GetMaterialElementIndices(const FHTBlueprintToggleGeneratorParams& Params)
+	{
+		TArray<int32> MaterialElementIndices = Params.MaterialElementIndices;
+		if (MaterialElementIndices.Num() == 0)
+		{
+			MaterialElementIndices.Add(Params.MaterialElementIndex);
+		}
+		return MaterialElementIndices;
+	}
+
+	static TArray<FName> BuildMIDVariableNames(const FName ToggleVariable, const TArray<int32>& MaterialElementIndices)
+	{
+		TArray<FName> MIDVariables;
+		MIDVariables.Reserve(MaterialElementIndices.Num());
+		for (const int32 MaterialElementIndex : MaterialElementIndices)
+		{
+			const FString Suffix = MaterialElementIndices.Num() > 1
+				? FString::Printf(TEXT("MID_%d"), MaterialElementIndex)
+				: TEXT("MID");
+			MIDVariables.Add(FName(*(ToggleVariable.ToString() + Suffix)));
+		}
+		return MIDVariables;
+	}
+
 	static int32 GetCycleStateCount(const FHTBlueprintToggleGeneratorParams& Params)
 	{
 		if (Params.Mode == EHTBlueprintToggleMode::Texture)
@@ -1207,7 +1231,7 @@ namespace HTToggleGenerator
 	static UEdGraphPin* AddApplyTextureNodes(
 		UEdGraph* Graph,
 		const FHTBlueprintToggleGeneratorParams& Params,
-		const FName MIDVariable,
+		const TArray<FName>& MIDVariables,
 		const TArray<UTexture*>& Textures,
 		UEdGraphPin* ExecIn,
 		UEdGraphPin* ValuePin,
@@ -1215,48 +1239,82 @@ namespace HTToggleGenerator
 		FHTBlueprintToggleGeneratorResult& Result,
 		TArray<UEdGraphNode*>* OutNodes)
 	{
+		const TArray<int32> MaterialElementIndices = GetMaterialElementIndices(Params);
 		UK2Node_SwitchInteger* SwitchNode = SpawnSwitchOnInt(Graph, Base, Textures.Num());
-		UK2Node_VariableGet* GetMID = SpawnVariableGet(Graph, MIDVariable, nullptr, Base + FVector2D(-100, 420));
-
-		if (!SwitchNode || !GetMID)
+		if (!SwitchNode || MIDVariables.Num() == 0 || MIDVariables.Num() != MaterialElementIndices.Num())
 		{
 			return nullptr;
 		}
 
 		AddNodeToList(OutNodes, SwitchNode);
-		AddNodeToList(OutNodes, GetMID);
 
 		Connect(ExecIn, GetSchema()->FindExecutionPin(*SwitchNode, EGPD_Input), Result, TEXT("Exec -> Texture Switch on Int"));
 		Connect(ValuePin, FindAnyPin(SwitchNode, TEXT("Selection")), Result, TEXT("Texture state -> Switch Selection"));
 
+		TArray<UK2Node_VariableGet*> GetMIDNodes;
+		for (int32 MaterialIndex = 0; MaterialIndex < MIDVariables.Num(); ++MaterialIndex)
+		{
+			UK2Node_VariableGet* GetMID = SpawnVariableGet(
+				Graph,
+				MIDVariables[MaterialIndex],
+				nullptr,
+				Base + FVector2D(1000 + MaterialIndex * 520, Textures.Num() * 360 + 120));
+			if (!GetMID)
+			{
+				return nullptr;
+			}
+			GetMIDNodes.Add(GetMID);
+			AddNodeToList(OutNodes, GetMID);
+		}
+
 		UEdGraphPin* LastExecOut = nullptr;
 		for (int32 TextureIndex = 0; TextureIndex < Textures.Num(); ++TextureIndex)
 		{
-			UK2Node_CallFunction* SetTexture = SpawnCall(
-				Graph,
-				UMaterialInstanceDynamic::StaticClass(),
-				TEXT("SetTextureParameterValue"),
-				Base + FVector2D(680, -80 + TextureIndex * 360),
-				Result);
-			if (!SetTexture)
+			UEdGraphPin* StateExec = FindPin(SwitchNode, FName(*FString::FromInt(TextureIndex)), EGPD_Output);
+			UK2Node_ExecutionSequence* Sequence = nullptr;
+			if (MIDVariables.Num() > 1)
 			{
-				continue;
+				Sequence = SpawnSequence(Graph, Base + FVector2D(520, -80 + TextureIndex * 360), MIDVariables.Num());
+				if (!Sequence)
+				{
+					continue;
+				}
+				AddNodeToList(OutNodes, Sequence);
+				Connect(StateExec, FindPin(Sequence, UEdGraphSchema_K2::PN_Execute, EGPD_Input), Result, FString::Printf(TEXT("Texture state %d -> material sequence"), TextureIndex));
 			}
 
-			AddNodeToList(OutNodes, SetTexture);
-			SetDefaultValue(FindAnyPin(SetTexture, TEXT("ParameterName")), Params.TextureParameterName);
-			SetDefaultObject(FindAnyPin(SetTexture, TEXT("Value")), Textures[TextureIndex]);
-			Connect(
-				FindPin(SwitchNode, FName(*FString::FromInt(TextureIndex)), EGPD_Output),
-				GetSchema()->FindExecutionPin(*SetTexture, EGPD_Input),
-				Result,
-				FString::Printf(TEXT("Switch %d -> Texture %d"), TextureIndex, TextureIndex));
-			Connect(
-				FindAnyPin(GetMID, MIDVariable),
-				FindSelfPin(SetTexture),
-				Result,
-				FString::Printf(TEXT("MID -> Texture %d Target"), TextureIndex));
-			LastExecOut = GetSchema()->FindExecutionPin(*SetTexture, EGPD_Output);
+			for (int32 MaterialIndex = 0; MaterialIndex < MIDVariables.Num(); ++MaterialIndex)
+			{
+				UK2Node_CallFunction* SetTexture = SpawnCall(
+					Graph,
+					UMaterialInstanceDynamic::StaticClass(),
+					TEXT("SetTextureParameterValue"),
+					Base + FVector2D(1050 + MaterialIndex * 520, -80 + TextureIndex * 360),
+					Result);
+				if (!SetTexture)
+				{
+					continue;
+				}
+
+				AddNodeToList(OutNodes, SetTexture);
+				SetDefaultValue(FindAnyPin(SetTexture, TEXT("ParameterName")), Params.TextureParameterName);
+				SetDefaultObject(FindAnyPin(SetTexture, TEXT("Value")), Textures[TextureIndex]);
+				UEdGraphPin* SetTextureExec = GetSchema()->FindExecutionPin(*SetTexture, EGPD_Input);
+				if (Sequence)
+				{
+					Connect(Sequence->GetThenPinGivenIndex(MaterialIndex), SetTextureExec, Result, FString::Printf(TEXT("State %d -> Material Slot %d"), TextureIndex, MaterialElementIndices[MaterialIndex]));
+				}
+				else
+				{
+					Connect(StateExec, SetTextureExec, Result, FString::Printf(TEXT("Switch %d -> Texture %d"), TextureIndex, TextureIndex));
+				}
+				Connect(
+					FindAnyPin(GetMIDNodes[MaterialIndex], MIDVariables[MaterialIndex]),
+					FindSelfPin(SetTexture),
+					Result,
+					FString::Printf(TEXT("MID %d -> Texture %d Target"), MaterialIndex, TextureIndex));
+				LastExecOut = GetSchema()->FindExecutionPin(*SetTexture, EGPD_Output);
+			}
 		}
 
 		return LastExecOut;
@@ -1265,7 +1323,7 @@ namespace HTToggleGenerator
 	static UEdGraphPin* AddApplyToggleNodes(
 		UEdGraph* Graph,
 		const FHTBlueprintToggleGeneratorParams& Params,
-		const FName MIDVariable,
+		const TArray<FName>& MIDVariables,
 		const TArray<UTexture*>& Textures,
 		UEdGraphPin* ExecIn,
 		UEdGraphPin* ValuePin,
@@ -1275,7 +1333,7 @@ namespace HTToggleGenerator
 	{
 		if (Params.Mode == EHTBlueprintToggleMode::Texture)
 		{
-			return AddApplyTextureNodes(Graph, Params, MIDVariable, Textures, ExecIn, ValuePin, Base, Result, OutNodes);
+			return AddApplyTextureNodes(Graph, Params, MIDVariables, Textures, ExecIn, ValuePin, Base, Result, OutNodes);
 		}
 
 		return AddApplyMaterialNodes(Graph, Params, ExecIn, ValuePin, Base, Result, OutNodes);
@@ -1286,7 +1344,7 @@ namespace HTToggleGenerator
 		UClass* SaveClass,
 		const FName ToggleVariable,
 		const FName SaveVariable,
-		const FName MIDVariable,
+		const TArray<FName>& MIDVariables,
 		const FString& SlotName,
 		const FHTBlueprintToggleGeneratorParams& Params,
 		UMaterialInterface* SourceMaterial,
@@ -1309,7 +1367,10 @@ namespace HTToggleGenerator
 
 		const int32 TrueY = BaseY - 280;
 		const int32 FalseY = BaseY + 470;
-		const int32 FlowOffsetX = Params.Mode == EHTBlueprintToggleMode::Texture ? 900 : 0;
+		const TArray<int32> MaterialElementIndices = GetMaterialElementIndices(Params);
+		const int32 FlowOffsetX = Params.Mode == EHTBlueprintToggleMode::Texture
+			? 900 + FMath::Max(0, MaterialElementIndices.Num() - 1) * 700
+			: 0;
 
 		UK2Node_CallFunction* DoesSaveExist = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("DoesSaveGameExist"), FVector2D(-960 + FlowOffsetX, BaseY), Result);
 		UK2Node_IfThenElse* Branch = SpawnBranch(Graph, FVector2D(-620 + FlowOffsetX, BaseY));
@@ -1338,21 +1399,34 @@ namespace HTToggleGenerator
 		if (Params.Mode == EHTBlueprintToggleMode::Texture)
 		{
 			UK2Node_CallFunction* GetOwningForMID = SpawnCall(Graph, UAnimInstance::StaticClass(), TEXT("GetOwningComponent"), FVector2D(-1460, BaseY + 380), Result);
-			UK2Node_CallFunction* CreateMID = SpawnCall(Graph, UPrimitiveComponent::StaticClass(), TEXT("CreateDynamicMaterialInstance"), FVector2D(-1200, BaseY), Result);
-			UK2Node_VariableSet* SetMID = SpawnVariableSet(Graph, MIDVariable, nullptr, FVector2D(-820, BaseY));
-			if (!GetOwningForMID || !CreateMID || !SetMID)
+			if (!GetOwningForMID || MIDVariables.Num() != MaterialElementIndices.Num())
 			{
 				return;
 			}
 
-			SetDefaultValue(FindAnyPin(CreateMID, TEXT("ElementIndex")), FString::FromInt(Params.MaterialElementIndex));
-			SetDefaultObject(FindAnyPin(CreateMID, TEXT("SourceMaterial")), SourceMaterial);
-			Connect(EntryExec, GetSchema()->FindExecutionPin(*CreateMID, EGPD_Input), Result, TEXT("Init entry -> Create MID"));
-			Connect(FindAnyPin(GetOwningForMID, UEdGraphSchema_K2::PN_ReturnValue), FindSelfPin(CreateMID), Result, TEXT("Owning Component -> Create MID Target"));
-			Connect(FindAnyPin(CreateMID, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SetMID, MIDVariable), Result, TEXT("Create MID -> MID variable"));
-			Connect(GetSchema()->FindExecutionPin(*CreateMID, EGPD_Output), GetSchema()->FindExecutionPin(*SetMID, EGPD_Input), Result, TEXT("Create MID -> Set MID"));
-			SaveFlowEntry = GetSchema()->FindExecutionPin(*SetMID, EGPD_Output);
-			SetupNodes = { GetOwningForMID, CreateMID, SetMID };
+			SetupNodes.Add(GetOwningForMID);
+			UEdGraphPin* SetupExec = EntryExec;
+			for (int32 MaterialIndex = 0; MaterialIndex < MaterialElementIndices.Num(); ++MaterialIndex)
+			{
+				const float SetupX = -1200.0f + MaterialIndex * 700.0f;
+				UK2Node_CallFunction* CreateMID = SpawnCall(Graph, UPrimitiveComponent::StaticClass(), TEXT("CreateDynamicMaterialInstance"), FVector2D(SetupX, BaseY), Result);
+				UK2Node_VariableSet* SetMID = SpawnVariableSet(Graph, MIDVariables[MaterialIndex], nullptr, FVector2D(SetupX + 380.0f, BaseY));
+				if (!CreateMID || !SetMID)
+				{
+					return;
+				}
+
+				SetDefaultValue(FindAnyPin(CreateMID, TEXT("ElementIndex")), FString::FromInt(MaterialElementIndices[MaterialIndex]));
+				SetDefaultObject(FindAnyPin(CreateMID, TEXT("SourceMaterial")), SourceMaterial);
+				Connect(SetupExec, GetSchema()->FindExecutionPin(*CreateMID, EGPD_Input), Result, FString::Printf(TEXT("Create MID for Material Slot %d"), MaterialElementIndices[MaterialIndex]));
+				Connect(FindAnyPin(GetOwningForMID, UEdGraphSchema_K2::PN_ReturnValue), FindSelfPin(CreateMID), Result, TEXT("Owning Component -> Create MID Target"));
+				Connect(FindAnyPin(CreateMID, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SetMID, MIDVariables[MaterialIndex]), Result, TEXT("Create MID -> MID variable"));
+				Connect(GetSchema()->FindExecutionPin(*CreateMID, EGPD_Output), GetSchema()->FindExecutionPin(*SetMID, EGPD_Input), Result, TEXT("Create MID -> Set MID"));
+				SetupExec = GetSchema()->FindExecutionPin(*SetMID, EGPD_Output);
+				SetupNodes.Add(CreateMID);
+				SetupNodes.Add(SetMID);
+			}
+			SaveFlowEntry = SetupExec;
 		}
 
 		Connect(SaveFlowEntry, GetSchema()->FindExecutionPin(*DoesSaveExist, EGPD_Input), Result, TEXT("Init entry -> DoesSaveGameExist"));
@@ -1368,7 +1442,7 @@ namespace HTToggleGenerator
 
 		TArray<UEdGraphNode*> MaterialNodes;
 		UEdGraphPin* SetAnimThen = GetSchema()->FindExecutionPin(*SetAnimValue, EGPD_Output);
-		AddApplyToggleNodes(Graph, Params, MIDVariable, Textures, SetAnimThen, FindSetOutputPin(SetAnimValue), FVector2D(1040 + FlowOffsetX, TrueY), Result, &MaterialNodes);
+		AddApplyToggleNodes(Graph, Params, MIDVariables, Textures, SetAnimThen, FindSetOutputPin(SetAnimValue), FVector2D(1040 + FlowOffsetX, TrueY), Result, &MaterialNodes);
 
 		Connect(FindAnyPin(Branch, UEdGraphSchema_K2::PN_Else), GetSchema()->FindExecutionPin(*CreateSave, EGPD_Input), Result, TEXT("Init false -> CreateSaveGame"));
 		Connect(GetSchema()->FindExecutionPin(*CreateSave, EGPD_Output), GetSchema()->FindExecutionPin(*SetSaveDefault, EGPD_Input), Result, TEXT("CreateSave -> Set Save default"));
@@ -1381,7 +1455,7 @@ namespace HTToggleGenerator
 			AddApplyToggleNodes(
 				Graph,
 				Params,
-				MIDVariable,
+				MIDVariables,
 				Textures,
 				GetSchema()->FindExecutionPin(*SaveDefaultSlot, EGPD_Output),
 				FindAnyPin(GetAnimDefault, ToggleVariable),
@@ -1397,7 +1471,7 @@ namespace HTToggleGenerator
 			Graph,
 			FString::Printf(TEXT("HT Init - %s"), *ToggleVariable.ToString()),
 			FVector2D(-1500, BaseY - 560),
-			FVector2D(Params.Mode == EHTBlueprintToggleMode::Texture ? 7000 : 6100, CommentHeight),
+			FVector2D(Params.Mode == EHTBlueprintToggleMode::Texture ? 7000 + FMath::Max(0, MIDVariables.Num() - 1) * 520 : 6100, CommentHeight),
 			FLinearColor(0.08f, 0.22f, 0.34f, 1.0f));
 		TArray<UEdGraphNode*> CommentNodes = { DoesSaveExist, Branch, LoadGame, CastSave, GetSaveValue, SetAnimValue, CreateSave, GetAnimDefault, SetSaveDefault, SaveDefaultSlot };
 		CommentNodes.Append(SetupNodes);
@@ -1410,7 +1484,7 @@ namespace HTToggleGenerator
 		UClass* SaveClass,
 		const FName ToggleVariable,
 		const FName SaveVariable,
-		const FName MIDVariable,
+		const TArray<FName>& MIDVariables,
 		const FString& SlotName,
 		const FHTBlueprintToggleGeneratorParams& Params,
 		const TArray<UTexture*>& Textures,
@@ -1526,7 +1600,7 @@ namespace HTToggleGenerator
 
 		TArray<UEdGraphNode*> MaterialNodes;
 		UEdGraphPin* SaveThen = GetSchema()->FindExecutionPin(*SaveSlot, EGPD_Output);
-		AddApplyToggleNodes(Graph, Params, MIDVariable, Textures, SaveThen, FindSetOutputPin(SetAnimValue), FVector2D(2900, BaseY), Result, &MaterialNodes);
+		AddApplyToggleNodes(Graph, Params, MIDVariables, Textures, SaveThen, FindSetOutputPin(SetAnimValue), FVector2D(2900, BaseY), Result, &MaterialNodes);
 
 		const float CommentHeight = Params.Mode == EHTBlueprintToggleMode::Texture
 			? FMath::Max(1800.0f, 900.0f + Textures.Num() * 360.0f)
@@ -1535,7 +1609,7 @@ namespace HTToggleGenerator
 			Graph,
 			FString::Printf(TEXT("HT Update - %s"), *ToggleVariable.ToString()),
 			FVector2D(-1030, BaseY - 220),
-			FVector2D(5600, CommentHeight),
+			FVector2D(5600 + FMath::Max(0, MIDVariables.Num() - 1) * 520, CommentHeight),
 			FLinearColor(0.10f, 0.24f, 0.18f, 1.0f));
 		TArray<UEdGraphNode*> CommentNodes = { GetController, WasPressed };
 		if (KeySpec.HasModifier())
@@ -1602,7 +1676,8 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 	SaveBlueprint->Modify();
 
 	const FName ToggleVariable = ToName(Params.ToggleVariableName, TEXT("Glove"));
-	const FName MIDVariable = FName(*(ToggleVariable.ToString() + TEXT("MID")));
+	const TArray<int32> MaterialElementIndices = GetMaterialElementIndices(Params);
+	const TArray<FName> MIDVariables = BuildMIDVariableNames(ToggleVariable, MaterialElementIndices);
 	const FString RawSaveVariableName = Trimmed(Params.SaveVariableName);
 	const FName SaveVariable = RawSaveVariableName.IsEmpty()
 		? FName(*(ToggleVariable.ToString() + TEXT("Save")))
@@ -1622,10 +1697,18 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 			Result.Errors.Add(TEXT("Texture switch mode requires the Initialize graph."));
 			return Result;
 		}
-		if (Params.MaterialElementIndex < 0)
+		if (MaterialElementIndices.Num() == 0)
 		{
-			Result.Errors.Add(TEXT("Material Slot must be zero or greater."));
+			Result.Errors.Add(TEXT("Texture switch mode requires at least one Material Slot."));
 			return Result;
+		}
+		for (const int32 MaterialElementIndex : MaterialElementIndices)
+		{
+			if (MaterialElementIndex < 0)
+			{
+				Result.Errors.Add(TEXT("Material Slot must be zero or greater."));
+				return Result;
+			}
 		}
 		if (Trimmed(Params.TextureParameterName).IsEmpty())
 		{
@@ -1664,10 +1747,20 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 	EnsureIntVariable(AnimBlueprint, ToggleVariable, Result, TEXT("动画蓝图"));
 	EnsureIntVariable(SaveBlueprint, SaveVariable, Result, TEXT("SaveGame 蓝图"));
 
-	if (Params.Mode == EHTBlueprintToggleMode::Texture &&
-		!EnsureObjectVariable(AnimBlueprint, MIDVariable, UMaterialInstanceDynamic::StaticClass(), Result, TEXT("Animation Blueprint MID")))
+	if (Params.Mode == EHTBlueprintToggleMode::Texture)
 	{
-		return Result;
+		for (int32 MaterialIndex = 0; MaterialIndex < MIDVariables.Num(); ++MaterialIndex)
+		{
+			if (!EnsureObjectVariable(
+				AnimBlueprint,
+				MIDVariables[MaterialIndex],
+				UMaterialInstanceDynamic::StaticClass(),
+				Result,
+				FString::Printf(TEXT("Animation Blueprint MID for Material Slot %d"), MaterialElementIndices[MaterialIndex])))
+			{
+				return Result;
+			}
+		}
 	}
 
 	FKismetEditorUtilities::CompileBlueprint(SaveBlueprint);
@@ -1690,15 +1783,15 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 
 	if (Params.bGenerateInitializeGraph)
 	{
-		GenerateInitializeGraph(AnimBlueprint, SaveClass, ToggleVariable, SaveVariable, MIDVariable, SlotName, Params, SourceMaterial, Textures, NextLayoutBaseY, Result);
+		GenerateInitializeGraph(AnimBlueprint, SaveClass, ToggleVariable, SaveVariable, MIDVariables, SlotName, Params, SourceMaterial, Textures, NextLayoutBaseY, Result);
 		NextLayoutBaseY += Params.Mode == EHTBlueprintToggleMode::Texture
-			? FMath::Max(1600, 1200 + Textures.Num() * 360)
+			? FMath::Max(1600, 1200 + Textures.Num() * 360 + MaterialElementIndices.Num() * 100)
 			: 1600;
 	}
 
 	if (Params.bGenerateUpdateGraph)
 	{
-		GenerateUpdateGraph(AnimBlueprint, SaveClass, ToggleVariable, SaveVariable, MIDVariable, SlotName, Params, Textures, NextLayoutBaseY, Result);
+		GenerateUpdateGraph(AnimBlueprint, SaveClass, ToggleVariable, SaveVariable, MIDVariables, SlotName, Params, Textures, NextLayoutBaseY, Result);
 	}
 
 	FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBlueprint);

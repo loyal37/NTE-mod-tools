@@ -27,7 +27,6 @@ private:
 	FReply OnCloseSettingsClicked();
 
 	TSharedRef<SWidget> MakeTextRow(const FText& Label, const TSharedRef<SEditableTextBox>& TextBox) const;
-	TSharedRef<SWidget> MakeNumberRow(const FText& Label, int32& ValueRef) const;
 	TSharedRef<SWidget> MakeBlueprintPickerRow(const FText& Label, bool bAnimBlueprint);
 	TSharedRef<SWidget> MakeMaterialPickerRow();
 	TSharedRef<SWidget> MakeTexturePickerRow(int32 TextureIndex);
@@ -36,6 +35,7 @@ private:
 	FReply OnRemoveTextureClicked(int32 TextureIndex);
 
 	bool ParseMaterialIDs(TArray<int32>& OutMaterialIDs, FString& OutError) const;
+	bool ParseTextureMaterialSlots(TArray<int32>& OutMaterialSlots, FString& OutError) const;
 	void ShowPanelError(const FText& ErrorText) const;
 	FString GetAnimBlueprintPath() const;
 	FString GetSaveGameBlueprintPath() const;
@@ -53,12 +53,12 @@ private:
 	FString SourceMaterialPath;
 	TArray<FString> TexturePaths;
 	EHTBlueprintToggleMode ToggleMode = EHTBlueprintToggleMode::MaterialSection;
-	int32 MaterialElementIndex = 0;
 	TWeakPtr<SWindow> CookedAssetExporterWindow;
 	TWeakPtr<SWindow> SettingsWindow;
 	TSharedPtr<SEditableTextBox> ToggleVariableBox;
 	TSharedPtr<SEditableTextBox> KeyNameBox;
 	TSharedPtr<SEditableTextBox> MaterialIDsBox;
+	TSharedPtr<SEditableTextBox> MaterialSlotsBox;
 	TSharedPtr<SEditableTextBox> TextureParameterBox;
 	TSharedPtr<SCheckBox> MultiMaterialCheckBox;
 	TSharedPtr<SWidgetSwitcher> ModeOptionsSwitcher;

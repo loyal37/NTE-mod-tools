@@ -21,6 +21,7 @@
 - `Key` 支持组合按键，例如 `ctrl 6`、`shift 6`、`alt 6`。
 - 自动生成 `Show Material Section` 节点。
 - 支持两张或更多 `Texture2D` 贴图循环切换，贴图数量没有固定上限。
+- 支持多个材质槽同步切换同一组贴图，例如 `12,13`。
 - 贴图模式会把选择的原材质写入 `Create Dynamic Material Instance` 的 `Source Material`，并生成对应数量的 `Set Texture Parameter Value` 节点。
 - 可设置材质槽编号、原材质和 Texture Parameter 名称，例如 `BaseColor`、`ID_Tex`、`LightMap`、`NormalMap`。
 - 贴图资产名称可以不同，不需要额外打包材质实例；参数名称必须与游戏原材质一致。
@@ -49,7 +50,7 @@
 2. 下载插件 zip 附件：
 
    ```text
-   HTToggleTool-v1.4.0.zip
+   HTToggleTool-v1.4.1.zip
    ```
 
 3. 关闭 Unreal Editor。
@@ -95,14 +96,18 @@
 
 1. 将 `Toggle Type` 切换为 `Texture switch`。
 2. 填写 `Anim Variable` 和触发按键。
-3. `Material Slot` 填写骨骼网格体材质列表中的元素编号，从 `0` 开始。
+3. `Material Slot(s)` 填写骨骼网格体材质列表中的元素编号，从 `0` 开始。单个材质槽填写 `12`，多个材质槽填写 `12,13`。
 4. `Source Material` 选择这些贴图所属的原材质或材质实例。它会填入 `Create Dynamic Material Instance` 节点的 `Source Material`。
 5. `Texture Parameter` 填写游戏原材质的贴图参数名，例如 `BaseColor`。
 6. 默认选择 `Texture 1 (State 0)` 和 `Texture 2 (State 1)` 两张贴图。
 7. 需要更多状态时点击 `Add texture`，每点击一次增加一张贴图；多于两张时可以使用右侧删除按钮移除某一行。
 8. 保持 `Initialize graph` 开启，然后生成节点。
 
-插件会自动创建 `AnimVariable + MID` 变量。初始化时使用指定原材质为对应材质槽创建动态材质实例；按键触发后按贴图列表顺序循环，并把状态保存到 SaveGame。例如选择三张贴图时会生成三个 `Switch on Int` 状态，取余值自动设置为 `3`。
+插件会自动创建所需的 MID 变量。初始化时使用指定原材质为对应材质槽创建动态材质实例；按键触发后按贴图列表顺序循环，并把状态保存到 SaveGame。例如选择三张贴图时会生成三个 `Switch on Int` 状态，取余值自动设置为 `3`。
+
+多个材质槽会共用一套按键、状态变量和保存逻辑，但每个材质槽拥有独立 MID 变量。例如变量名为 `clothcolor`、材质槽为 `12,13` 时，会生成 `clothcolorMID_12` 和 `clothcolorMID_13`，每次切换会同时更新两个材质槽。
+
+如果旧版本中曾经用同一个变量分别为材质槽 12、13 生成过两套节点，请先删除旧的两组 `HT Init` 和 `HT Update` 注释框及其中节点，再使用 `12,13` 一次生成。保留旧节点会造成同一按键重复修改状态。
 
 ## 烘焙资产导出
 

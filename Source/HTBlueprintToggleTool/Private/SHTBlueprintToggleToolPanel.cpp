@@ -14,7 +14,6 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
-#include "Widgets/Input/SNumericEntryBox.h"
 #include "Widgets/Input/SSegmentedControl.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -142,7 +141,7 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 				.Padding(0, 0, 0, 12)
 				[
 					SNew(STextBlock)
-					.Text(LOCTEXT("Subtitle", "Generate material visibility or multi-texture toggle nodes. Save Variable and Save Slot are derived from Anim Variable."))
+					.Text(LOCTEXT("Subtitle", "Generate material visibility or multi-slot, multi-texture toggle nodes. Save Variable and Save Slot are derived from Anim Variable."))
 					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 					.AutoWrapText(true)
 				]
@@ -240,7 +239,11 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						.AutoHeight()
 						.Padding(0, 0, 0, 6)
 						[
-							MakeNumberRow(LOCTEXT("MaterialElementIndex", "Material Slot"), MaterialElementIndex)
+							MakeTextRow(
+								LOCTEXT("MaterialElementIndices", "Material Slot(s)"),
+								SAssignNew(MaterialSlotsBox, SEditableTextBox)
+								.Text(FText::FromString(TEXT("0")))
+								.HintText(LOCTEXT("MaterialElementIndicesHint", "Single: 12    Multiple: 12,13")))
 						]
 						+ SVerticalBox::Slot()
 						.AutoHeight()
@@ -391,34 +394,6 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTextRow(const FText& Label,
 		.FillWidth(1.0f)
 		[
 			TextBox
-		];
-}
-
-TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeNumberRow(const FText& Label, int32& ValueRef) const
-{
-	int32* ValuePtr = &ValueRef;
-	return SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot()
-		.AutoWidth()
-		.VAlign(VAlign_Center)
-		[
-			SNew(SBox)
-			.WidthOverride(150)
-			[
-				SNew(STextBlock).Text(Label)
-			]
-		]
-		+ SHorizontalBox::Slot()
-		.AutoWidth()
-		[
-			SNew(SBox)
-			.WidthOverride(140)
-			[
-				SNew(SNumericEntryBox<int32>)
-				.Value_Lambda([ValuePtr]() -> TOptional<int32> { return *ValuePtr; })
-				.OnValueChanged_Lambda([ValuePtr](int32 NewValue) { *ValuePtr = NewValue; })
-				.MinValue(0)
-			]
 		];
 }
 
@@ -799,6 +774,53 @@ bool SHTBlueprintToggleToolPanel::ParseMaterialIDs(TArray<int32>& OutMaterialIDs
 	return true;
 }
 
+bool SHTBlueprintToggleToolPanel::ParseTextureMaterialSlots(TArray<int32>& OutMaterialSlots, FString& OutError) const
+{
+	OutMaterialSlots.Reset();
+
+	FString RawValue = HTTogglePanel::TextBoxString(MaterialSlotsBox);
+	RawValue.TrimStartAndEndInline();
+	RawValue.ReplaceInline(TEXT(";"), TEXT(","));
+	RawValue.ReplaceInline(TEXT(" "), TEXT(","));
+	RawValue.ReplaceInline(TEXT("\r"), TEXT(","));
+	RawValue.ReplaceInline(TEXT("\n"), TEXT(","));
+	RawValue.ReplaceInline(TEXT("\t"), TEXT(","));
+
+	if (RawValue.IsEmpty())
+	{
+		OutError = TEXT("Enter at least one Material Slot, for example 12 or 12,13.");
+		return false;
+	}
+
+	TArray<FString> Parts;
+	RawValue.ParseIntoArray(Parts, TEXT(","), true);
+	for (FString Part : Parts)
+	{
+		Part.TrimStartAndEndInline();
+		if (Part.IsEmpty())
+		{
+			continue;
+		}
+
+		int32 MaterialSlot = INDEX_NONE;
+		if (!LexTryParseString(MaterialSlot, *Part) || MaterialSlot < 0)
+		{
+			OutError = FString::Printf(TEXT("Invalid Material Slot: %s"), *Part);
+			return false;
+		}
+
+		OutMaterialSlots.AddUnique(MaterialSlot);
+	}
+
+	if (OutMaterialSlots.Num() == 0)
+	{
+		OutError = TEXT("Enter at least one valid Material Slot.");
+		return false;
+	}
+
+	return true;
+}
+
 void SHTBlueprintToggleToolPanel::ShowPanelError(const FText& ErrorText) const
 {
 	if (StatusText.IsValid())
@@ -834,6 +856,7 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	}
 
 	TArray<int32> MaterialIDs;
+	TArray<int32> TextureMaterialSlots;
 	if (ToggleMode == EHTBlueprintToggleMode::MaterialSection)
 	{
 		FString MaterialIDError;
@@ -845,6 +868,12 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	}
 	else
 	{
+		FString MaterialSlotError;
+		if (!ParseTextureMaterialSlots(TextureMaterialSlots, MaterialSlotError))
+		{
+			ShowPanelError(FText::FromString(MaterialSlotError));
+			return FReply::Handled();
+		}
 		if (!IsChecked(InitGraphCheckBox))
 		{
 			ShowPanelError(LOCTEXT("TextureNeedsInit", "Texture switch mode requires Initialize graph so the dynamic material instance can be created."));
@@ -887,7 +916,8 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	Params.MaterialID = MaterialIDs.Num() > 0 ? MaterialIDs[0] : 0;
 	Params.SectionIndex = 0;
 	Params.LODIndex = 0;
-	Params.MaterialElementIndex = MaterialElementIndex;
+	Params.MaterialElementIndex = TextureMaterialSlots.Num() > 0 ? TextureMaterialSlots[0] : 0;
+	Params.MaterialElementIndices = TextureMaterialSlots;
 	Params.SourceMaterialPath = SourceMaterialPath;
 	Params.TextureParameterName = TextBoxString(TextureParameterBox).TrimStartAndEnd();
 	Params.TexturePaths = TexturePaths;
