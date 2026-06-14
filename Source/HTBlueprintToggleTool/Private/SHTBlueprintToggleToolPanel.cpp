@@ -2,6 +2,7 @@
 
 #include "AssetRegistry/AssetData.h"
 #include "Engine/Blueprint.h"
+#include "Engine/Texture2D.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "HTBlueprintToggleGenerator.h"
@@ -13,11 +14,13 @@
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SNumericEntryBox.h"
+#include "Widgets/Input/SSegmentedControl.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSeparator.h"
 #include "Widgets/Layout/SUniformGridPanel.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Widgets/SWindow.h"
 #include "Widgets/Text/STextBlock.h"
@@ -137,9 +140,37 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 				.Padding(0, 0, 0, 12)
 				[
 					SNew(STextBlock)
-					.Text(LOCTEXT("Subtitle", "Generate single-material or multi-material toggle nodes. Save Variable and Save Slot are derived from Anim Variable."))
+					.Text(LOCTEXT("Subtitle", "Generate material visibility or two-texture toggle nodes. Save Variable and Save Slot are derived from Anim Variable."))
 					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 					.AutoWrapText(true)
+				]
+
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				.Padding(0, 0, 0, 10)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					[
+						SNew(SBox)
+						.WidthOverride(150)
+						[
+							SNew(STextBlock).Text(LOCTEXT("ToggleMode", "Toggle Type"))
+						]
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					[
+						SNew(SSegmentedControl<EHTBlueprintToggleMode>)
+						.Value_Lambda([this]() { return ToggleMode; })
+						.OnValueChanged(this, &SHTBlueprintToggleToolPanel::OnToggleModeChanged)
+						+ SSegmentedControl<EHTBlueprintToggleMode>::Slot(EHTBlueprintToggleMode::MaterialSection)
+						.Text(LOCTEXT("MaterialMode", "Material visibility"))
+						+ SSegmentedControl<EHTBlueprintToggleMode>::Slot(EHTBlueprintToggleMode::Texture)
+						.Text(LOCTEXT("TextureMode", "Texture switch"))
+					]
 				]
 
 				+ SVerticalBox::Slot()
@@ -172,22 +203,65 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 
 				+ SVerticalBox::Slot()
 				.AutoHeight()
-				.Padding(0, 0, 0, 6)
 				[
-					MakeTextRow(
-						LOCTEXT("MaterialIDs", "Material ID(s)"),
-						SAssignNew(MaterialIDsBox, SEditableTextBox)
-						.HintText(LOCTEXT("MaterialIDsHint", "Single: 16    Multiple: 13,20")))
-				]
+					SAssignNew(ModeOptionsSwitcher, SWidgetSwitcher)
+					.WidgetIndex_Lambda([this]() { return ToggleMode == EHTBlueprintToggleMode::Texture ? 1 : 0; })
 
-				+ SVerticalBox::Slot()
-				.AutoHeight()
-				.Padding(150, 0, 0, 6)
-				[
-					SAssignNew(MultiMaterialCheckBox, SCheckBox)
-					.IsChecked(ECheckBoxState::Unchecked)
+					+ SWidgetSwitcher::Slot()
 					[
-						SNew(STextBlock).Text(LOCTEXT("MultiMaterial", "Multiple materials"))
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 6)
+						[
+							MakeTextRow(
+								LOCTEXT("MaterialIDs", "Material ID(s)"),
+								SAssignNew(MaterialIDsBox, SEditableTextBox)
+								.HintText(LOCTEXT("MaterialIDsHint", "Single: 16    Multiple: 13,20")))
+						]
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(150, 0, 0, 6)
+						[
+							SAssignNew(MultiMaterialCheckBox, SCheckBox)
+							.IsChecked(ECheckBoxState::Unchecked)
+							[
+								SNew(STextBlock).Text(LOCTEXT("MultiMaterial", "Multiple materials"))
+							]
+						]
+					]
+
+					+ SWidgetSwitcher::Slot()
+					[
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 6)
+						[
+							MakeNumberRow(LOCTEXT("MaterialElementIndex", "Material Slot"), MaterialElementIndex)
+						]
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 6)
+						[
+							MakeTextRow(
+								LOCTEXT("TextureParameter", "Texture Parameter"),
+								SAssignNew(TextureParameterBox, SEditableTextBox)
+								.Text(FText::FromString(TEXT("BaseColor")))
+								.HintText(LOCTEXT("TextureParameterHint", "Example: BaseColor")))
+						]
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 6)
+						[
+							MakeTexturePickerRow(LOCTEXT("TextureA", "Texture A (State 0)"), true)
+						]
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 6)
+						[
+							MakeTexturePickerRow(LOCTEXT("TextureB", "Texture B (State 1)"), false)
+						]
 					]
 				]
 
@@ -337,6 +411,31 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeBlueprintPickerRow(const FT
 		];
 }
 
+TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTexturePickerRow(const FText& Label, bool bTextureA)
+{
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		[
+			SNew(SBox)
+			.WidthOverride(150)
+			[
+				SNew(STextBlock).Text(Label)
+			]
+		]
+		+ SHorizontalBox::Slot()
+		.FillWidth(1.0f)
+		[
+			SNew(SObjectPropertyEntryBox)
+			.AllowedClass(UTexture2D::StaticClass())
+			.AllowClear(false)
+			.DisplayThumbnail(true)
+			.ObjectPath(bTextureA ? TAttribute<FString>(this, &SHTBlueprintToggleToolPanel::GetTextureAPath) : TAttribute<FString>(this, &SHTBlueprintToggleToolPanel::GetTextureBPath))
+			.OnObjectChanged(bTextureA ? FOnSetObject::CreateSP(this, &SHTBlueprintToggleToolPanel::OnTextureAChanged) : FOnSetObject::CreateSP(this, &SHTBlueprintToggleToolPanel::OnTextureBChanged))
+		];
+}
+
 FReply SHTBlueprintToggleToolPanel::OnOpenCookedAssetExporterClicked()
 {
 	if (CookedAssetExporterWindow.IsValid())
@@ -452,6 +551,25 @@ FString SHTBlueprintToggleToolPanel::GetSaveGameBlueprintPath() const
 	return SaveGameBlueprintPath;
 }
 
+FString SHTBlueprintToggleToolPanel::GetTextureAPath() const
+{
+	return TextureAPath;
+}
+
+FString SHTBlueprintToggleToolPanel::GetTextureBPath() const
+{
+	return TextureBPath;
+}
+
+void SHTBlueprintToggleToolPanel::OnToggleModeChanged(EHTBlueprintToggleMode NewMode)
+{
+	ToggleMode = NewMode;
+	if (ModeOptionsSwitcher.IsValid())
+	{
+		ModeOptionsSwitcher->Invalidate(EInvalidateWidgetReason::Layout);
+	}
+}
+
 void SHTBlueprintToggleToolPanel::OnAnimBlueprintChanged(const FAssetData& AssetData)
 {
 	if (AssetData.IsValid())
@@ -467,6 +585,22 @@ void SHTBlueprintToggleToolPanel::OnSaveGameBlueprintChanged(const FAssetData& A
 	{
 		SaveGameBlueprintPath = AssetData.GetSoftObjectPath().ToString();
 		UpdateAssetSummaryText();
+	}
+}
+
+void SHTBlueprintToggleToolPanel::OnTextureAChanged(const FAssetData& AssetData)
+{
+	if (AssetData.IsValid())
+	{
+		TextureAPath = AssetData.GetSoftObjectPath().ToString();
+	}
+}
+
+void SHTBlueprintToggleToolPanel::OnTextureBChanged(const FAssetData& AssetData)
+{
+	if (AssetData.IsValid())
+	{
+		TextureBPath = AssetData.GetSoftObjectPath().ToString();
 	}
 }
 
@@ -588,14 +722,36 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	}
 
 	TArray<int32> MaterialIDs;
-	FString MaterialIDError;
-	if (!ParseMaterialIDs(MaterialIDs, MaterialIDError))
+	if (ToggleMode == EHTBlueprintToggleMode::MaterialSection)
 	{
-		ShowPanelError(FText::FromString(MaterialIDError));
-		return FReply::Handled();
+		FString MaterialIDError;
+		if (!ParseMaterialIDs(MaterialIDs, MaterialIDError))
+		{
+			ShowPanelError(FText::FromString(MaterialIDError));
+			return FReply::Handled();
+		}
+	}
+	else
+	{
+		if (!IsChecked(InitGraphCheckBox))
+		{
+			ShowPanelError(LOCTEXT("TextureNeedsInit", "Texture switch mode requires Initialize graph so the dynamic material instance can be created."));
+			return FReply::Handled();
+		}
+		if (TextBoxString(TextureParameterBox).TrimStartAndEnd().IsEmpty())
+		{
+			ShowPanelError(LOCTEXT("MissingTextureParameter", "Choose a Texture Parameter name, for example BaseColor."));
+			return FReply::Handled();
+		}
+		if (TextureAPath.IsEmpty() || TextureBPath.IsEmpty())
+		{
+			ShowPanelError(LOCTEXT("MissingTextures", "Choose both Texture A and Texture B."));
+			return FReply::Handled();
+		}
 	}
 
 	FHTBlueprintToggleGeneratorParams Params;
+	Params.Mode = ToggleMode;
 	Params.AnimBlueprintPath = AnimBlueprintPath;
 	Params.SaveGameBlueprintPath = SaveGameBlueprintPath;
 	Params.ToggleVariableName = ToggleVariableName;
@@ -603,9 +759,13 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	Params.SlotName.Empty();
 	Params.KeyName = KeyName;
 	Params.MaterialIDs = MaterialIDs;
-	Params.MaterialID = MaterialIDs[0];
+	Params.MaterialID = MaterialIDs.Num() > 0 ? MaterialIDs[0] : 0;
 	Params.SectionIndex = 0;
 	Params.LODIndex = 0;
+	Params.MaterialElementIndex = MaterialElementIndex;
+	Params.TextureParameterName = TextBoxString(TextureParameterBox).TrimStartAndEnd();
+	Params.TextureAPath = TextureAPath;
+	Params.TextureBPath = TextureBPath;
 	Params.bGenerateInitializeGraph = IsChecked(InitGraphCheckBox);
 	Params.bGenerateUpdateGraph = IsChecked(UpdateGraphCheckBox);
 	Params.bSaveAssets = IsChecked(SaveAssetsCheckBox);

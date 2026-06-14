@@ -1,6 +1,6 @@
 # HT Blueprint Toggle Tool
 
-这是一个 Unreal Engine 5 编辑器插件，用来一键生成「动画蓝图 + SaveGame 蓝图」里的材质显示/隐藏切换节点。
+这是一个 Unreal Engine 5 编辑器插件，用来一键生成「动画蓝图 + SaveGame 蓝图」里的材质显示/隐藏与贴图切换节点。
 
 ## 功能
 
@@ -20,6 +20,10 @@
 - `Key` 支持直接输入符号按键，例如 `=`, `[`, `]`, `;`，会自动转换为 UE 正确的按键名。
 - `Key` 支持组合按键，例如 `ctrl 6`、`shift 6`、`alt 6`。
 - 自动生成 `Show Material Section` 节点。
+- 支持两张 `Texture2D` 贴图循环切换。
+- 贴图模式会自动创建动态材质实例，并生成 `Set Texture Parameter Value` 节点。
+- 可设置材质槽编号和 Texture Parameter 名称，例如 `BaseColor`、`ID_Tex`、`LightMap`、`NomralMap`。
+- 贴图资产名称可以不同，不需要额外打包材质实例；参数名称必须与游戏原材质一致。
 - 如果变量不存在，会自动创建需要的 `int` 变量。
 - 只需要输入 `Anim Variable`，SaveGame 相关名称自动生成：
   - Save Variable：`AnimVariable + Save`
@@ -36,8 +40,8 @@
 
 - Unreal Engine 5.6
 - Windows Win64 编辑器
-- Visual Studio 2022 C++ 工具链
-- .NET Framework Developer Pack / SDK 4.6 或更高版本
+- 使用 Release 二进制版本不需要 Visual Studio。
+- 只有自行编译源码时才需要 Visual Studio 2022 C++ 工具链和对应 SDK。
 
 ## 安装方法
 
@@ -45,7 +49,7 @@
 2. 下载插件 zip 附件：
 
    ```text
-   HTToggleTool-v1.2.4.zip
+   HTToggleTool-v1.3.0.zip
    ```
 
 3. 关闭 Unreal Editor。
@@ -86,6 +90,17 @@
    - `Update graph`
    - `Save assets`
 8. 点击 `Generate Toggle Nodes`。
+
+### 贴图切换
+
+1. 将 `Toggle Type` 切换为 `Texture switch`。
+2. 填写 `Anim Variable` 和触发按键。
+3. `Material Slot` 填写骨骼网格体材质列表中的元素编号，从 `0` 开始。
+4. `Texture Parameter` 填写游戏原材质的贴图参数名，例如 `BaseColor`。
+5. 分别选择 `Texture A (State 0)` 和 `Texture B (State 1)`。
+6. 保持 `Initialize graph` 开启，然后生成节点。
+
+插件会自动创建 `AnimVariable + MID` 变量。初始化时为指定材质槽创建动态材质实例；按键触发后在两张贴图之间循环，并把状态保存到 SaveGame。
 
 ## 烘焙资产导出
 

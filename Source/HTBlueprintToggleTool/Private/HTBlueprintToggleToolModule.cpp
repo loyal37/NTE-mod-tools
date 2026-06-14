@@ -50,7 +50,7 @@ void FHTBlueprintToggleToolModule::RegisterMenus()
 	Section.AddMenuEntry(
 		"OpenHTBlueprintToggleTool",
 		LOCTEXT("MenuEntryTitle", "HT Blueprint Toggle Tool"),
-		LOCTEXT("MenuEntryTooltip", "Open the HT material toggle blueprint generator."),
+		LOCTEXT("MenuEntryTooltip", "Open the HT material and texture toggle blueprint generator."),
 		FSlateIcon(),
 		FUIAction(FExecuteAction::CreateRaw(this, &FHTBlueprintToggleToolModule::OpenPluginWindow)));
 }

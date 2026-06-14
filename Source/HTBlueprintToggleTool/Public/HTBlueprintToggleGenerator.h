@@ -2,8 +2,15 @@
 
 #include "CoreMinimal.h"
 
+enum class EHTBlueprintToggleMode : uint8
+{
+	MaterialSection,
+	Texture
+};
+
 struct FHTBlueprintToggleGeneratorParams
 {
+	EHTBlueprintToggleMode Mode = EHTBlueprintToggleMode::MaterialSection;
 	FString AnimBlueprintPath;
 	FString SaveGameBlueprintPath;
 	FString ToggleVariableName;
@@ -14,6 +21,10 @@ struct FHTBlueprintToggleGeneratorParams
 	TArray<int32> MaterialIDs;
 	int32 SectionIndex = 0;
 	int32 LODIndex = 0;
+	int32 MaterialElementIndex = 0;
+	FString TextureParameterName;
+	FString TextureAPath;
+	FString TextureBPath;
 	bool bGenerateInitializeGraph = true;
 	bool bGenerateUpdateGraph = true;
 	bool bSaveAssets = true;
