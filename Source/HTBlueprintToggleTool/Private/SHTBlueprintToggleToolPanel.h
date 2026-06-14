@@ -7,6 +7,7 @@
 class SCheckBox;
 class SEditableTextBox;
 class STextBlock;
+class SVerticalBox;
 class SWindow;
 class SWidgetSwitcher;
 struct FAssetData;
@@ -28,7 +29,11 @@ private:
 	TSharedRef<SWidget> MakeTextRow(const FText& Label, const TSharedRef<SEditableTextBox>& TextBox) const;
 	TSharedRef<SWidget> MakeNumberRow(const FText& Label, int32& ValueRef) const;
 	TSharedRef<SWidget> MakeBlueprintPickerRow(const FText& Label, bool bAnimBlueprint);
-	TSharedRef<SWidget> MakeTexturePickerRow(const FText& Label, bool bTextureA);
+	TSharedRef<SWidget> MakeMaterialPickerRow();
+	TSharedRef<SWidget> MakeTexturePickerRow(int32 TextureIndex);
+	void RebuildTextureRows();
+	FReply OnAddTextureClicked();
+	FReply OnRemoveTextureClicked(int32 TextureIndex);
 
 	bool ParseMaterialIDs(TArray<int32>& OutMaterialIDs, FString& OutError) const;
 	void ShowPanelError(const FText& ErrorText) const;
@@ -36,18 +41,17 @@ private:
 	FString GetSaveGameBlueprintPath() const;
 	void OnAnimBlueprintChanged(const FAssetData& AssetData);
 	void OnSaveGameBlueprintChanged(const FAssetData& AssetData);
-	void OnTextureAChanged(const FAssetData& AssetData);
-	void OnTextureBChanged(const FAssetData& AssetData);
+	void OnSourceMaterialChanged(const FAssetData& AssetData);
+	void OnTextureChanged(const FAssetData& AssetData, int32 TextureIndex);
 	void UpdateAssetSummaryText() const;
 	FString GetShortAssetName(const FString& ObjectPath) const;
-	FString GetTextureAPath() const;
-	FString GetTextureBPath() const;
+	FString GetSourceMaterialPath() const;
 	void OnToggleModeChanged(EHTBlueprintToggleMode NewMode);
 
 	FString AnimBlueprintPath;
 	FString SaveGameBlueprintPath;
-	FString TextureAPath;
-	FString TextureBPath;
+	FString SourceMaterialPath;
+	TArray<FString> TexturePaths;
 	EHTBlueprintToggleMode ToggleMode = EHTBlueprintToggleMode::MaterialSection;
 	int32 MaterialElementIndex = 0;
 	TWeakPtr<SWindow> CookedAssetExporterWindow;
@@ -58,6 +62,7 @@ private:
 	TSharedPtr<SEditableTextBox> TextureParameterBox;
 	TSharedPtr<SCheckBox> MultiMaterialCheckBox;
 	TSharedPtr<SWidgetSwitcher> ModeOptionsSwitcher;
+	TSharedPtr<SVerticalBox> TextureRowsBox;
 	TSharedPtr<SCheckBox> InitGraphCheckBox;
 	TSharedPtr<SCheckBox> UpdateGraphCheckBox;
 	TSharedPtr<SCheckBox> SaveAssetsCheckBox;

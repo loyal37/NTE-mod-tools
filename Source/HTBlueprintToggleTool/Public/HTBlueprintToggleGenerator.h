@@ -22,9 +22,9 @@ struct FHTBlueprintToggleGeneratorParams
 	int32 SectionIndex = 0;
 	int32 LODIndex = 0;
 	int32 MaterialElementIndex = 0;
+	FString SourceMaterialPath;
 	FString TextureParameterName;
-	FString TextureAPath;
-	FString TextureBPath;
+	TArray<FString> TexturePaths;
 	bool bGenerateInitializeGraph = true;
 	bool bGenerateUpdateGraph = true;
 	bool bSaveAssets = true;

@@ -1,9 +1,9 @@
 {
 	"FileVersion": 3,
-	"Version": 11,
-	"VersionName": "1.3.0",
+	"Version": 12,
+	"VersionName": "1.4.0",
 	"FriendlyName": "HT Blueprint Toggle Tool",
-	"Description": "Editor tools for generating material visibility and texture toggle blueprints, plus exporting selected cooked assets.",
+	"Description": "Editor tools for generating material visibility and multi-texture toggle blueprints, plus exporting selected cooked assets.",
 	"Category": "HT",
 	"CreatedBy": "loyal37",
 	"EnabledByDefault": false,
