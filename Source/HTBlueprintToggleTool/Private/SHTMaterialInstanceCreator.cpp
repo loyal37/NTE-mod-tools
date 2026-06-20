@@ -185,7 +185,7 @@ TSharedRef<SWidget> SHTMaterialInstanceCreator::MakeAssetPickerRow(const FText& 
 				.AllowedClass(AllowedClass)
 				.AllowClear(true)
 				.DisplayThumbnail(true)
-				.ObjectPath(TAttribute<FString>::CreateSP(this, &SHTMaterialInstanceCreator::GetAssetPath, AssetIndex))
+				.ObjectPath(this, &SHTMaterialInstanceCreator::GetAssetPath, AssetIndex)
 				.OnObjectChanged(FOnSetObject::CreateSP(this, &SHTMaterialInstanceCreator::OnAssetChanged, AssetIndex))
 		];
 }

@@ -18,7 +18,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.0.zip
+   HTToggleTool-v1.5.1.zip
    ```
 
 2. 关闭 Unreal Editor。
