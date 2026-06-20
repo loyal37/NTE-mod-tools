@@ -35,6 +35,7 @@ namespace HTCookedAssetExporter
 	static const TCHAR* SourceDirectoryKey = TEXT("CookedSourceDirectory");
 	static const TCHAR* OutputDirectoryKey = TEXT("OutputDirectory");
 	static const TCHAR* ExportAndPackageKey = TEXT("ExportAndPackage");
+	static const TCHAR* OpenOutputDirectoryKey = TEXT("OpenOutputDirectory");
 	static const TCHAR* SelectedAssetsKeyPrefix = TEXT("SelectedAssets_");
 	static const TCHAR* PackagerExecutable = TEXT("D:/NTE Mod Packager/NTE Mod Packager.exe");
 
@@ -71,9 +72,11 @@ void SHTCookedAssetExporter::Construct(const FArguments& InArgs)
 		TEXT("Content/Characters/Player"));
 	FString OutputDirectory;
 	bool bExportAndPackage = false;
+	bool bOpenOutputDirectory = false;
 	GConfig->GetString(HTCookedAssetExporter::ConfigSection, HTCookedAssetExporter::SourceDirectoryKey, CookedDirectory, GEditorPerProjectIni);
 	GConfig->GetString(HTCookedAssetExporter::ConfigSection, HTCookedAssetExporter::OutputDirectoryKey, OutputDirectory, GEditorPerProjectIni);
 	GConfig->GetBool(HTCookedAssetExporter::ConfigSection, HTCookedAssetExporter::ExportAndPackageKey, bExportAndPackage, GEditorPerProjectIni);
+	GConfig->GetBool(HTCookedAssetExporter::ConfigSection, HTCookedAssetExporter::OpenOutputDirectoryKey, bOpenOutputDirectory, GEditorPerProjectIni);
 
 	ChildSlot
 	[
@@ -255,6 +258,18 @@ void SHTCookedAssetExporter::Construct(const FArguments& InArgs)
 							SNew(STextBlock).Text(LOCTEXT("ExportAndPackage", "Export and package"))
 						]
 					]
+					+ SVerticalBox::Slot()
+					.AutoHeight()
+					.Padding(0, 6, 0, 0)
+					[
+						SAssignNew(OpenOutputDirectoryCheckBox, SCheckBox)
+						.IsChecked(bOpenOutputDirectory ? ECheckBoxState::Checked : ECheckBoxState::Unchecked)
+						.OnCheckStateChanged(this, &SHTCookedAssetExporter::OnOpenOutputDirectoryCheckStateChanged)
+						.ToolTipText(LOCTEXT("OpenOutputDirectoryTooltip", "Open the exported character directory after a successful export."))
+						[
+							SNew(STextBlock).Text(LOCTEXT("OpenOutputDirectory", "Open output directory after export"))
+						]
+					]
 				]
 			]
 
@@ -361,6 +376,7 @@ FReply SHTCookedAssetExporter::OnExportClicked()
 	const FString OutputDirectory = NormalizeDirectory(GetOutputDirectory());
 	const FString ExportRootDirectory = GetExportRootDirectory(SourceDirectory, OutputDirectory);
 	const bool bExportAndPackage = ExportAndPackageCheckBox.IsValid() && ExportAndPackageCheckBox->IsChecked();
+	const bool bOpenOutputDirectory = OpenOutputDirectoryCheckBox.IsValid() && OpenOutputDirectoryCheckBox->IsChecked();
 	if (!IFileManager::Get().DirectoryExists(*SourceDirectory))
 	{
 		ShowStatus(LOCTEXT("InvalidSource", "The cooked source directory does not exist."), true);
@@ -447,6 +463,11 @@ FReply SHTCookedAssetExporter::OnExportClicked()
 			FText::AsNumber(FailedFiles.Num()),
 			FText::FromString(FailedFiles[0])), true);
 		return FReply::Handled();
+	}
+
+	if (bOpenOutputDirectory)
+	{
+		FPlatformProcess::ExploreFolder(*ExportRootDirectory);
 	}
 
 	if (bExportAndPackage)
@@ -613,6 +634,16 @@ void SHTCookedAssetExporter::OnExportAndPackageCheckStateChanged(ECheckBoxState 
 	GConfig->SetBool(
 		HTCookedAssetExporter::ConfigSection,
 		HTCookedAssetExporter::ExportAndPackageKey,
+		NewState == ECheckBoxState::Checked,
+		GEditorPerProjectIni);
+	GConfig->Flush(false, GEditorPerProjectIni);
+}
+
+void SHTCookedAssetExporter::OnOpenOutputDirectoryCheckStateChanged(ECheckBoxState NewState)
+{
+	GConfig->SetBool(
+		HTCookedAssetExporter::ConfigSection,
+		HTCookedAssetExporter::OpenOutputDirectoryKey,
 		NewState == ECheckBoxState::Checked,
 		GEditorPerProjectIni);
 	GConfig->Flush(false, GEditorPerProjectIni);

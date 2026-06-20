@@ -9,6 +9,7 @@
 #include "Materials/MaterialInterface.h"
 #include "PropertyCustomizationHelpers.h"
 #include "SHTCookedAssetExporter.h"
+#include "SHTMaterialInstanceCreator.h"
 #include "Styling/AppStyle.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
@@ -70,6 +71,34 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						SNew(STextBlock)
 						.Text(LOCTEXT("Title", "HT Blueprint Toggle Tool"))
 						.Font(FAppStyle::GetFontStyle("DetailsView.CategoryFontStyle"))
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(0, 0, 6, 0)
+					[
+						SNew(SButton)
+						.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+						.ToolTipText(LOCTEXT("MaterialInstanceTooltip", "Update a material graph and create a four-texture material instance."))
+						.OnClicked(this, &SHTBlueprintToggleToolPanel::OnOpenMaterialInstanceCreatorClicked)
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.VAlign(VAlign_Center)
+							.Padding(0, 0, 4, 0)
+							[
+								SNew(SImage)
+									.Image(FAppStyle::GetBrush("ClassIcon.MaterialInstanceConstant"))
+							]
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.VAlign(VAlign_Center)
+							[
+								SNew(STextBlock)
+								.Text(LOCTEXT("MaterialInstanceButton", "Material Instance"))
+							]
+						]
 					]
 					+ SHorizontalBox::Slot()
 					.AutoWidth()
@@ -525,6 +554,27 @@ FReply SHTBlueprintToggleToolPanel::OnRemoveTextureClicked(int32 TextureIndex)
 		TexturePaths.RemoveAt(TextureIndex);
 		RebuildTextureRows();
 	}
+	return FReply::Handled();
+}
+
+FReply SHTBlueprintToggleToolPanel::OnOpenMaterialInstanceCreatorClicked()
+{
+	if (MaterialInstanceCreatorWindow.IsValid())
+	{
+		MaterialInstanceCreatorWindow.Pin()->BringToFront();
+		return FReply::Handled();
+	}
+
+	TSharedRef<SWindow> Window = SNew(SWindow)
+		.Title(LOCTEXT("MaterialInstanceCreatorTitle", "HT Material Instance Creator"))
+		.ClientSize(FVector2D(760.0f, 600.0f))
+		.SupportsMaximize(false)
+		.SupportsMinimize(false)
+		.SizingRule(ESizingRule::UserSized);
+
+	MaterialInstanceCreatorWindow = Window;
+	Window->SetContent(SNew(SHTMaterialInstanceCreator));
+	FSlateApplication::Get().AddWindow(Window);
 	return FReply::Handled();
 }
 

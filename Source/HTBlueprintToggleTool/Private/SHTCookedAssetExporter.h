@@ -46,6 +46,7 @@ private:
 	void OnSearchTextChanged(const FText& NewText);
 	void OnDirectoryTextCommitted(const FText& NewText, ETextCommit::Type CommitType);
 	void OnExportAndPackageCheckStateChanged(ECheckBoxState NewState);
+	void OnOpenOutputDirectoryCheckStateChanged(ECheckBoxState NewState);
 	void OnItemCheckStateChanged(ECheckBoxState NewState, TSharedPtr<FHTCookedAssetExportItem> Item);
 	TSharedRef<ITableRow> GenerateAssetRow(TSharedPtr<FHTCookedAssetExportItem> Item, const TSharedRef<STableViewBase>& OwnerTable);
 	void UpdateSelectionSummary();
@@ -69,6 +70,7 @@ private:
 	TSharedPtr<SSearchBox> SearchBox;
 	TSharedPtr<SCheckBox> OverwriteCheckBox;
 	TSharedPtr<SCheckBox> ExportAndPackageCheckBox;
+	TSharedPtr<SCheckBox> OpenOutputDirectoryCheckBox;
 	TSharedPtr<STextBlock> SelectionSummaryText;
 	TSharedPtr<STextBlock> ExportStatusText;
 };

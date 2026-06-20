@@ -9,6 +9,7 @@ public class HTBlueprintToggleTool : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
+				"AssetTools",
 				"AssetRegistry",
 				"BlueprintGraph",
 				"Core",
@@ -20,6 +21,7 @@ public class HTBlueprintToggleTool : ModuleRules
 				"Json",
 				"Kismet",
 				"KismetCompiler",
+				"MaterialEditor",
 				"PropertyEditor",
 				"Projects",
 				"Slate",

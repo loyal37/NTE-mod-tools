@@ -22,6 +22,7 @@ public:
 
 private:
 	FReply OnGenerateClicked();
+	FReply OnOpenMaterialInstanceCreatorClicked();
 	FReply OnOpenCookedAssetExporterClicked();
 	FReply OnOpenSettingsClicked();
 	FReply OnCloseSettingsClicked();
@@ -54,6 +55,7 @@ private:
 	TArray<FString> TexturePaths;
 	EHTBlueprintToggleMode ToggleMode = EHTBlueprintToggleMode::MaterialSection;
 	TWeakPtr<SWindow> CookedAssetExporterWindow;
+	TWeakPtr<SWindow> MaterialInstanceCreatorWindow;
 	TWeakPtr<SWindow> SettingsWindow;
 	TSharedPtr<SEditableTextBox> ToggleVariableBox;
 	TSharedPtr<SEditableTextBox> KeyNameBox;
