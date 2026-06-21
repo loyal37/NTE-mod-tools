@@ -58,7 +58,7 @@ void SHTMaterialInstanceCreator::Construct(const FArguments& InArgs)
 			.Padding(0, 0, 0, 10)
 			[
 				SNew(STextBlock)
-					.Text(LOCTEXT("Help", "Updates the selected material graph and creates an instance with BaseColor, ID_Tex, LightMap, and NormalMap overrides."))
+					.Text(LOCTEXT("Help", "Deletes every node in the selected material, rebuilds the required graph, and creates an instance with four texture overrides."))
 					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 					.AutoWrapText(true)
 			]
@@ -144,7 +144,7 @@ void SHTMaterialInstanceCreator::Construct(const FArguments& InArgs)
 			.Padding(0, 0, 0, 10)
 			[
 				SNew(SButton)
-					.Text(LOCTEXT("Create", "Update Material and Create Instance"))
+					.Text(LOCTEXT("Create", "Rebuild Material and Create Instance"))
 					.HAlign(HAlign_Center)
 					.OnClicked(this, &SHTMaterialInstanceCreator::OnCreateClicked)
 			]

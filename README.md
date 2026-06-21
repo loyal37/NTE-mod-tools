@@ -18,7 +18,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.1.zip
+   HTToggleTool-v1.5.2.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -47,9 +47,11 @@
    NormalMap
    ```
 
-4. 点击 `Update Material and Create Instance`。
+4. 点击 `Rebuild Material and Create Instance`。
 
-工具会复用或创建以下材质参数节点：
+执行时会先删除选定材质中的全部节点，再从零创建下列节点和连线。请不要对需要保留原节点的材质直接执行。
+
+工具会重新创建以下材质参数节点：
 
 | 参数 | 采样器类型 | 连接 |
 | --- | --- | --- |
@@ -58,7 +60,7 @@
 | `LightMap` | Linear Color | `RGB -> MF_PhongToMetalRoughness.AmbientColor` |
 | `NormalMap` | Normal | `RGB -> Material Normal` |
 
-同时会创建或复用：
+同时会重新创建：
 
 - 黑色常量到 `Lerp A`
 - `DiffuseColorMapWeight` 标量参数到 `Lerp Alpha`

@@ -13,6 +13,7 @@
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
+#include "Materials/MaterialFunctionInterface.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Misc/PackageName.h"
 #include "UObject/Package.h"
@@ -24,6 +25,7 @@ namespace HTMaterialInstanceBuilder
 	static const FName LightMapParameter(TEXT("LightMap"));
 	static const FName NormalParameter(TEXT("NormalMap"));
 	static const FName DiffuseWeightParameter(TEXT("DiffuseColorMapWeight"));
+	static const TCHAR* PhongFunctionPath = TEXT("/InterchangeAssets/Functions/MF_PhongToMetalRoughness.MF_PhongToMetalRoughness");
 
 	static FString NormalizeObjectPath(FString Path)
 	{
@@ -70,39 +72,35 @@ namespace HTMaterialInstanceBuilder
 		return false;
 	}
 
-	static UMaterialExpressionMaterialFunctionCall* FindPhongFunction(
+	static UMaterialExpressionMaterialFunctionCall* CreatePhongFunction(
 		UMaterial* Material,
+		UMaterialFunctionInterface* MaterialFunction,
+		const int32 X,
+		const int32 Y,
 		TMap<FString, FString>& OutInputNames)
 	{
-		const TCHAR* RequiredInputs[] = { TEXT("AmbientColor"), TEXT("DiffuseColor"), TEXT("SpecularColor"), TEXT("Shininess") };
-		for (UMaterialExpression* Expression : Material->GetExpressions())
+		UMaterialExpressionMaterialFunctionCall* FunctionCall = Cast<UMaterialExpressionMaterialFunctionCall>(
+			UMaterialEditingLibrary::CreateMaterialExpression(
+				Material,
+				UMaterialExpressionMaterialFunctionCall::StaticClass(),
+				X,
+				Y));
+		if (!FunctionCall || !FunctionCall->SetMaterialFunction(MaterialFunction))
 		{
-			UMaterialExpressionMaterialFunctionCall* FunctionCall = Cast<UMaterialExpressionMaterialFunctionCall>(Expression);
-			if (!FunctionCall)
-			{
-				continue;
-			}
-
-			TMap<FString, FString> CandidateNames;
-			bool bMatches = true;
-			for (const TCHAR* RequiredInput : RequiredInputs)
-			{
-				FString ActualInputName;
-				if (!FindInputName(FunctionCall, RequiredInput, ActualInputName))
-				{
-					bMatches = false;
-					break;
-				}
-				CandidateNames.Add(RequiredInput, MoveTemp(ActualInputName));
-			}
-
-			if (bMatches)
-			{
-				OutInputNames = MoveTemp(CandidateNames);
-				return FunctionCall;
-			}
+			return nullptr;
 		}
-		return nullptr;
+
+		const TCHAR* RequiredInputs[] = { TEXT("AmbientColor"), TEXT("DiffuseColor"), TEXT("SpecularColor"), TEXT("Shininess") };
+		for (const TCHAR* RequiredInput : RequiredInputs)
+		{
+			FString ActualInputName;
+			if (!FindInputName(FunctionCall, RequiredInput, ActualInputName))
+			{
+				return nullptr;
+			}
+			OutInputNames.Add(RequiredInput, MoveTemp(ActualInputName));
+		}
+		return FunctionCall;
 	}
 
 	static UMaterialExpressionTextureSampleParameter2D* FindTextureParameter(UMaterial* Material, const FName ParameterName)
@@ -360,6 +358,7 @@ FHTMaterialInstanceBuilderResult FHTMaterialInstanceBuilder::Build(const FHTMate
 	UTexture2D* IDTexture = LoadAsset<UTexture2D>(Params.IDTexturePath);
 	UTexture2D* LightMapTexture = LoadAsset<UTexture2D>(Params.LightMapTexturePath);
 	UTexture2D* NormalTexture = LoadAsset<UTexture2D>(Params.NormalTexturePath);
+	UMaterialFunctionInterface* PhongFunction = LoadAsset<UMaterialFunctionInterface>(PhongFunctionPath);
 	if (!Material)
 	{
 		Result.Errors.Add(TEXT("Choose a valid Material asset."));
@@ -380,22 +379,33 @@ FHTMaterialInstanceBuilderResult FHTMaterialInstanceBuilder::Build(const FHTMate
 	{
 		Result.Errors.Add(TEXT("Choose a valid NormalMap texture."));
 	}
+	if (!PhongFunction)
+	{
+		Result.Errors.Add(TEXT("Could not load the engine MF_PhongToMetalRoughness material function."));
+	}
 	if (!Result.Errors.IsEmpty())
 	{
 		return Result;
 	}
 
 	Material->Modify();
+	UMaterialEditingLibrary::DeleteAllMaterialExpressions(Material);
+
+	const int32 FunctionX = 200;
+	const int32 FunctionY = 0;
 	TMap<FString, FString> FunctionInputNames;
-	UMaterialExpressionMaterialFunctionCall* FunctionCall = FindPhongFunction(Material, FunctionInputNames);
+	UMaterialExpressionMaterialFunctionCall* FunctionCall = CreatePhongFunction(
+		Material,
+		PhongFunction,
+		FunctionX,
+		FunctionY,
+		FunctionInputNames);
 	if (!FunctionCall)
 	{
-		Result.Errors.Add(TEXT("The selected material does not contain a function node with AmbientColor, DiffuseColor, SpecularColor, and Shininess inputs."));
+		Result.Errors.Add(TEXT("Could not create the MF_PhongToMetalRoughness function node."));
 		return Result;
 	}
 
-	const int32 FunctionX = FunctionCall->MaterialExpressionEditorX;
-	const int32 FunctionY = FunctionCall->MaterialExpressionEditorY;
 	UMaterialExpressionTextureSampleParameter2D* BaseColor = FindOrCreateTextureParameter(Material, BaseColorParameter, BaseColorTexture, SAMPLERTYPE_Color, FunctionX - 900, FunctionY + 130);
 	UMaterialExpressionTextureSampleParameter2D* IDTex = FindOrCreateTextureParameter(Material, IDTextureParameter, IDTexture, SAMPLERTYPE_LinearColor, FunctionX - 430, FunctionY + 360);
 	UMaterialExpressionTextureSampleParameter2D* LightMap = FindOrCreateTextureParameter(Material, LightMapParameter, LightMapTexture, SAMPLERTYPE_LinearColor, FunctionX - 420, FunctionY - 280);
@@ -404,8 +414,18 @@ FHTMaterialInstanceBuilderResult FHTMaterialInstanceBuilder::Build(const FHTMate
 	UMaterialExpressionConstant3Vector* Black = FindOrCreateBlackConstant(Material, Lerp, FunctionX - 900, FunctionY - 80);
 	UMaterialExpressionScalarParameter* DiffuseWeight = FindOrCreateDiffuseWeight(Material, FunctionX - 880, FunctionY + 520);
 	UMaterialExpressionConstant* Shininess = FindOrCreateShininessConstant(Material, FunctionCall, FunctionInputNames[TEXT("Shininess")], FunctionX - 150, FunctionY + 640);
+	UMaterialExpressionConstant3Vector* EmissiveBlack = Cast<UMaterialExpressionConstant3Vector>(
+		UMaterialEditingLibrary::CreateMaterialExpression(
+			Material,
+			UMaterialExpressionConstant3Vector::StaticClass(),
+			FunctionX + 350,
+			FunctionY + 360));
+	if (EmissiveBlack)
+	{
+		EmissiveBlack->Constant = FLinearColor::Black;
+	}
 
-	if (!BaseColor || !IDTex || !LightMap || !NormalMap || !Lerp || !Black || !DiffuseWeight || !Shininess)
+	if (!BaseColor || !IDTex || !LightMap || !NormalMap || !Lerp || !Black || !DiffuseWeight || !Shininess || !EmissiveBlack)
 	{
 		Result.Errors.Add(TEXT("One or more material expressions could not be created."));
 		return Result;
@@ -422,6 +442,7 @@ FHTMaterialInstanceBuilderResult FHTMaterialInstanceBuilder::Build(const FHTMate
 	ConnectProperty(FunctionCall, TEXT("Metallic"), MP_Metallic, Result, TEXT("function Metallic output"));
 	ConnectProperty(FunctionCall, TEXT("Specular"), MP_Specular, Result, TEXT("function Specular output"));
 	ConnectProperty(FunctionCall, TEXT("Roughness"), MP_Roughness, Result, TEXT("function Roughness output"));
+	ConnectProperty(EmissiveBlack, TEXT(""), MP_EmissiveColor, Result, TEXT("black constant to Emissive Color"));
 	ConnectProperty(NormalMap, TEXT("RGB"), MP_Normal, Result, TEXT("NormalMap RGB"));
 	if (!Result.Errors.IsEmpty())
 	{
@@ -462,7 +483,7 @@ FHTMaterialInstanceBuilderResult FHTMaterialInstanceBuilder::Build(const FHTMate
 	}
 
 	Result.bSuccess = true;
-	Result.Notes.Add(FString::Printf(TEXT("Updated material graph: %s"), *Material->GetPathName()));
+	Result.Notes.Add(FString::Printf(TEXT("Cleared and rebuilt material graph: %s"), *Material->GetPathName()));
 	Result.Notes.Add(FString::Printf(TEXT("Created or updated material instance: %s"), *Result.InstancePath));
 	return Result;
 }
