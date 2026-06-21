@@ -44,6 +44,8 @@ private:
 	void OnSaveGameBlueprintChanged(const FAssetData& AssetData);
 	void OnSourceMaterialChanged(const FAssetData& AssetData);
 	void OnTextureChanged(const FAssetData& AssetData, int32 TextureIndex);
+	void LoadBlueprintSettings();
+	void SaveBlueprintSettings() const;
 	void UpdateAssetSummaryText() const;
 	FString GetShortAssetName(const FString& ObjectPath) const;
 	FString GetSourceMaterialPath() const;

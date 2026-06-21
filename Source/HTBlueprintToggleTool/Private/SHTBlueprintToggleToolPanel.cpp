@@ -7,6 +7,7 @@
 #include "Framework/Notifications/NotificationManager.h"
 #include "HTBlueprintToggleGenerator.h"
 #include "Materials/MaterialInterface.h"
+#include "Misc/ConfigCacheIni.h"
 #include "PropertyCustomizationHelpers.h"
 #include "SHTCookedAssetExporter.h"
 #include "SHTMaterialInstanceCreator.h"
@@ -30,6 +31,10 @@
 
 namespace HTTogglePanel
 {
+	static const TCHAR* SettingsSection = TEXT("HTBlueprintToggleTool.BlueprintSettings");
+	static const TCHAR* AnimBlueprintKey = TEXT("AnimBlueprintPath");
+	static const TCHAR* SaveGameBlueprintKey = TEXT("SaveGameBlueprintPath");
+
 	static FString TextBoxString(const TSharedPtr<SEditableTextBox>& TextBox)
 	{
 		return TextBox.IsValid() ? TextBox->GetText().ToString() : FString();
@@ -45,6 +50,7 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 {
 	AnimBlueprintPath = TEXT("/Game/Characters/Player/010_nanally/nanally_animbp.nanally_animbp");
 	SaveGameBlueprintPath = TEXT("/Game/Characters/Player/010_nanally/nanally_saved_bp.nanally_saved_bp");
+	LoadBlueprintSettings();
 	TexturePaths.SetNum(2);
 
 	ChildSlot
@@ -71,34 +77,6 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						SNew(STextBlock)
 						.Text(LOCTEXT("Title", "HT Blueprint Toggle Tool"))
 						.Font(FAppStyle::GetFontStyle("DetailsView.CategoryFontStyle"))
-					]
-					+ SHorizontalBox::Slot()
-					.AutoWidth()
-					.VAlign(VAlign_Center)
-					.Padding(0, 0, 6, 0)
-					[
-						SNew(SButton)
-						.ButtonStyle(FAppStyle::Get(), "SimpleButton")
-						.ToolTipText(LOCTEXT("MaterialInstanceTooltip", "Update a material graph and create a four-texture material instance."))
-						.OnClicked(this, &SHTBlueprintToggleToolPanel::OnOpenMaterialInstanceCreatorClicked)
-						[
-							SNew(SHorizontalBox)
-							+ SHorizontalBox::Slot()
-							.AutoWidth()
-							.VAlign(VAlign_Center)
-							.Padding(0, 0, 4, 0)
-							[
-								SNew(SImage)
-									.Image(FAppStyle::GetBrush("ClassIcon.MaterialInstanceConstant"))
-							]
-							+ SHorizontalBox::Slot()
-							.AutoWidth()
-							.VAlign(VAlign_Center)
-							[
-								SNew(STextBlock)
-								.Text(LOCTEXT("MaterialInstanceButton", "Material Instance"))
-							]
-						]
 					]
 					+ SHorizontalBox::Slot()
 					.AutoWidth()
@@ -187,7 +165,7 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						SNew(SBox)
 						.WidthOverride(150)
 						[
-							SNew(STextBlock).Text(LOCTEXT("ToggleMode", "Toggle Type"))
+							SNew(STextBlock).Text(LOCTEXT("FunctionSwitch", "Function Switch"))
 						]
 					]
 					+ SHorizontalBox::Slot()
@@ -200,6 +178,31 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						.Text(LOCTEXT("MaterialMode", "Material visibility"))
 						+ SSegmentedControl<EHTBlueprintToggleMode>::Slot(EHTBlueprintToggleMode::Texture)
 						.Text(LOCTEXT("TextureMode", "Texture switch"))
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(8, 0, 0, 0)
+					[
+						SNew(SButton)
+						.ToolTipText(LOCTEXT("MaterialInstanceTooltip", "Rebuild a material graph and create a four-texture material instance."))
+						.OnClicked(this, &SHTBlueprintToggleToolPanel::OnOpenMaterialInstanceCreatorClicked)
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.VAlign(VAlign_Center)
+							.Padding(0, 0, 4, 0)
+							[
+								SNew(SImage).Image(FAppStyle::GetBrush("ClassIcon.MaterialInstanceConstant"))
+							]
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.VAlign(VAlign_Center)
+							[
+								SNew(STextBlock).Text(LOCTEXT("MaterialInstanceButton", "Material Instance"))
+							]
+						]
 					]
 				]
 
@@ -712,6 +715,7 @@ void SHTBlueprintToggleToolPanel::OnAnimBlueprintChanged(const FAssetData& Asset
 	if (AssetData.IsValid())
 	{
 		AnimBlueprintPath = AssetData.GetSoftObjectPath().ToString();
+		SaveBlueprintSettings();
 		UpdateAssetSummaryText();
 	}
 }
@@ -721,8 +725,39 @@ void SHTBlueprintToggleToolPanel::OnSaveGameBlueprintChanged(const FAssetData& A
 	if (AssetData.IsValid())
 	{
 		SaveGameBlueprintPath = AssetData.GetSoftObjectPath().ToString();
+		SaveBlueprintSettings();
 		UpdateAssetSummaryText();
 	}
+}
+
+void SHTBlueprintToggleToolPanel::LoadBlueprintSettings()
+{
+	if (!GConfig)
+	{
+		return;
+	}
+
+	FString SavedPath;
+	if (GConfig->GetString(HTTogglePanel::SettingsSection, HTTogglePanel::AnimBlueprintKey, SavedPath, GEditorPerProjectIni) && !SavedPath.IsEmpty())
+	{
+		AnimBlueprintPath = MoveTemp(SavedPath);
+	}
+	if (GConfig->GetString(HTTogglePanel::SettingsSection, HTTogglePanel::SaveGameBlueprintKey, SavedPath, GEditorPerProjectIni) && !SavedPath.IsEmpty())
+	{
+		SaveGameBlueprintPath = MoveTemp(SavedPath);
+	}
+}
+
+void SHTBlueprintToggleToolPanel::SaveBlueprintSettings() const
+{
+	if (!GConfig)
+	{
+		return;
+	}
+
+	GConfig->SetString(HTTogglePanel::SettingsSection, HTTogglePanel::AnimBlueprintKey, *AnimBlueprintPath, GEditorPerProjectIni);
+	GConfig->SetString(HTTogglePanel::SettingsSection, HTTogglePanel::SaveGameBlueprintKey, *SaveGameBlueprintPath, GEditorPerProjectIni);
+	GConfig->Flush(false, GEditorPerProjectIni);
 }
 
 void SHTBlueprintToggleToolPanel::OnSourceMaterialChanged(const FAssetData& AssetData)

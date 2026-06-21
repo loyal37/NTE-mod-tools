@@ -9,6 +9,7 @@
 #include "Materials/Material.h"
 #include "Materials/MaterialExpressionConstant.h"
 #include "Materials/MaterialExpressionConstant3Vector.h"
+#include "Materials/MaterialExpressionComment.h"
 #include "Materials/MaterialExpressionLinearInterpolate.h"
 #include "Materials/MaterialExpressionMaterialFunctionCall.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
@@ -26,6 +27,37 @@ namespace HTMaterialInstanceBuilder
 	static const FName NormalParameter(TEXT("NormalMap"));
 	static const FName DiffuseWeightParameter(TEXT("DiffuseColorMapWeight"));
 	static const TCHAR* PhongFunctionPath = TEXT("/InterchangeAssets/Functions/MF_PhongToMetalRoughness.MF_PhongToMetalRoughness");
+
+	static bool ClearMaterialGraph(UMaterial* Material, FHTMaterialInstanceBuilderResult& Result)
+	{
+		while (!Material->GetExpressions().IsEmpty())
+		{
+			UMaterialExpression* Expression = Material->GetExpressions().Last();
+			const int32 PreviousCount = Material->GetExpressions().Num();
+			UMaterialEditingLibrary::DeleteMaterialExpression(Material, Expression);
+			if (Material->GetExpressions().Num() >= PreviousCount)
+			{
+				Result.Errors.Add(FString::Printf(TEXT("Could not remove material expression: %s"), *GetNameSafe(Expression)));
+				return false;
+			}
+		}
+
+		for (UMaterialExpressionComment* Comment : Material->GetEditorComments())
+		{
+			if (Comment)
+			{
+				Comment->MarkAsGarbage();
+			}
+		}
+		Material->GetExpressionCollection().Empty();
+
+		if (!Material->GetExpressions().IsEmpty() || !Material->GetEditorComments().IsEmpty())
+		{
+			Result.Errors.Add(TEXT("The existing material graph could not be cleared completely."));
+			return false;
+		}
+		return true;
+	}
 
 	static FString NormalizeObjectPath(FString Path)
 	{
@@ -389,7 +421,10 @@ FHTMaterialInstanceBuilderResult FHTMaterialInstanceBuilder::Build(const FHTMate
 	}
 
 	Material->Modify();
-	UMaterialEditingLibrary::DeleteAllMaterialExpressions(Material);
+	if (!ClearMaterialGraph(Material, Result))
+	{
+		return Result;
+	}
 
 	const int32 FunctionX = 200;
 	const int32 FunctionY = 0;
@@ -460,17 +495,23 @@ FHTMaterialInstanceBuilderResult FHTMaterialInstanceBuilder::Build(const FHTMate
 
 	Instance->Modify();
 	UMaterialEditingLibrary::SetMaterialInstanceParent(Instance, Material);
-	const bool bBaseColorSet = UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(Instance, BaseColorParameter, BaseColorTexture);
-	const bool bIDSet = UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(Instance, IDTextureParameter, IDTexture);
-	const bool bLightMapSet = UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(Instance, LightMapParameter, LightMapTexture);
-	const bool bNormalSet = UMaterialEditingLibrary::SetMaterialInstanceTextureParameterValue(Instance, NormalParameter, NormalTexture);
-	if (!bBaseColorSet || !bIDSet || !bLightMapSet || !bNormalSet)
+	Instance->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(BaseColorParameter), BaseColorTexture);
+	Instance->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(IDTextureParameter), IDTexture);
+	Instance->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(LightMapParameter), LightMapTexture);
+	Instance->SetTextureParameterValueEditorOnly(FMaterialParameterInfo(NormalParameter), NormalTexture);
+	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
+
+	const bool bParametersVerified =
+		UMaterialEditingLibrary::GetMaterialInstanceTextureParameterValue(Instance, BaseColorParameter) == BaseColorTexture &&
+		UMaterialEditingLibrary::GetMaterialInstanceTextureParameterValue(Instance, IDTextureParameter) == IDTexture &&
+		UMaterialEditingLibrary::GetMaterialInstanceTextureParameterValue(Instance, LightMapParameter) == LightMapTexture &&
+		UMaterialEditingLibrary::GetMaterialInstanceTextureParameterValue(Instance, NormalParameter) == NormalTexture;
+	if (!bParametersVerified)
 	{
 		Result.Errors.Add(TEXT("The material instance could not override all four texture parameters."));
 		return Result;
 	}
 
-	UMaterialEditingLibrary::UpdateMaterialInstance(Instance);
 	Instance->MarkPackageDirty();
 	if (Params.bSaveAssets)
 	{

@@ -18,7 +18,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.2.zip
+   HTToggleTool-v1.5.3.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -34,7 +34,7 @@
 
 ## 材质实例工具
 
-在主面板右上角点击 `Material Instance`。
+在主面板的 `Function Switch` 一行点击 `Material Instance`。
 
 1. 选择需要修改的 `Material`。
 2. `Instance Name` 默认使用原材质名称加 `_Inst`，也可以手动修改。
@@ -68,20 +68,13 @@
 - 数值 `25` 到 `MF_PhongToMetalRoughness.Shininess`
 - 函数的 `BaseColor / Metallic / Specular / Roughness` 输出到材质对应输入
 
-选定材质必须已经包含一个具有以下输入的材质函数节点：
-
-```text
-AmbientColor
-DiffuseColor
-SpecularColor
-Shininess
-```
-
 已存在的同名材质实例会被更新，不会重复创建。
 
 ## 蓝图切换
 
 在 `Settings` 中选择动画蓝图和 SaveGame 蓝图，然后在主面板选择：
+
+选定的两个蓝图路径会立即保存到当前工程的编辑器配置中，关闭并重新打开工具后仍会保留。
 
 - `Material visibility`：材质区域显示/隐藏。
 - `Texture switch`：材质贴图循环切换。
