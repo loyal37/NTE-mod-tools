@@ -18,7 +18,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.3.zip
+   HTToggleTool-v1.5.4.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -78,6 +78,8 @@
 
 - `Material visibility`：材质区域显示/隐藏。
 - `Texture switch`：材质贴图循环切换。
+
+在 `Texture switch` 模式中点击 `Material Slot(s)` 右侧的 `Analyze`，插件会分析当前 AnimBP 的预览骨骼网格体，按材质对 Slot 分组。选择一组后会自动填写该组的全部 Slot ID，并同步填写 `Source Material`。
 
 多材质区域示例：
 

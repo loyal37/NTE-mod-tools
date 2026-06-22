@@ -10,6 +10,9 @@ class STextBlock;
 class SVerticalBox;
 class SWindow;
 class SWidgetSwitcher;
+class FAssetThumbnail;
+class FAssetThumbnailPool;
+class UMaterialInterface;
 struct FAssetData;
 
 class SHTBlueprintToggleToolPanel : public SCompoundWidget
@@ -29,11 +32,15 @@ private:
 
 	TSharedRef<SWidget> MakeTextRow(const FText& Label, const TSharedRef<SEditableTextBox>& TextBox) const;
 	TSharedRef<SWidget> MakeBlueprintPickerRow(const FText& Label, bool bAnimBlueprint);
+	TSharedRef<SWidget> MakeMaterialSlotsRow();
 	TSharedRef<SWidget> MakeMaterialPickerRow();
 	TSharedRef<SWidget> MakeTexturePickerRow(int32 TextureIndex);
+	TSharedRef<SWidget> MakeMaterialGroupRow(int32 GroupIndex);
 	void RebuildTextureRows();
 	FReply OnAddTextureClicked();
 	FReply OnRemoveTextureClicked(int32 TextureIndex);
+	FReply OnAnalyzeMaterialsClicked();
+	FReply OnSelectMaterialGroupClicked(int32 GroupIndex);
 
 	bool ParseMaterialIDs(TArray<int32>& OutMaterialIDs, FString& OutError) const;
 	bool ParseTextureMaterialSlots(TArray<int32>& OutMaterialSlots, FString& OutError) const;
@@ -50,6 +57,13 @@ private:
 	FString GetShortAssetName(const FString& ObjectPath) const;
 	FString GetSourceMaterialPath() const;
 	void OnToggleModeChanged(EHTBlueprintToggleMode NewMode);
+	bool BuildMaterialSlotGroups(FString& OutMeshName, FString& OutError);
+
+	struct FMaterialSlotGroup
+	{
+		TWeakObjectPtr<UMaterialInterface> Material;
+		TArray<int32> SlotIndices;
+	};
 
 	FString AnimBlueprintPath;
 	FString SaveGameBlueprintPath;
@@ -58,7 +72,11 @@ private:
 	EHTBlueprintToggleMode ToggleMode = EHTBlueprintToggleMode::MaterialSection;
 	TWeakPtr<SWindow> CookedAssetExporterWindow;
 	TWeakPtr<SWindow> MaterialInstanceCreatorWindow;
+	TWeakPtr<SWindow> MaterialAnalysisWindow;
 	TWeakPtr<SWindow> SettingsWindow;
+	TArray<FMaterialSlotGroup> MaterialSlotGroups;
+	TArray<TSharedPtr<FAssetThumbnail>> MaterialGroupThumbnails;
+	TSharedPtr<FAssetThumbnailPool> MaterialThumbnailPool;
 	TSharedPtr<SEditableTextBox> ToggleVariableBox;
 	TSharedPtr<SEditableTextBox> KeyNameBox;
 	TSharedPtr<SEditableTextBox> MaterialIDsBox;

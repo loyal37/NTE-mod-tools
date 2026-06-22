@@ -1,7 +1,11 @@
 #include "SHTBlueprintToggleToolPanel.h"
 
+#include "Animation/AnimBlueprint.h"
+#include "Animation/Skeleton.h"
 #include "AssetRegistry/AssetData.h"
+#include "AssetThumbnail.h"
 #include "Engine/Blueprint.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/Texture2D.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -43,6 +47,17 @@ namespace HTTogglePanel
 	static bool IsChecked(const TSharedPtr<SCheckBox>& CheckBox)
 	{
 		return CheckBox.IsValid() && CheckBox->IsChecked();
+	}
+
+	static FString JoinSlotIndices(const TArray<int32>& SlotIndices, const FString& Separator = TEXT(","))
+	{
+		TArray<FString> Values;
+		Values.Reserve(SlotIndices.Num());
+		for (const int32 SlotIndex : SlotIndices)
+		{
+			Values.Add(FString::FromInt(SlotIndex));
+		}
+		return FString::Join(Values, *Separator);
 	}
 }
 
@@ -271,11 +286,7 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						.AutoHeight()
 						.Padding(0, 0, 0, 6)
 						[
-							MakeTextRow(
-								LOCTEXT("MaterialElementIndices", "Material Slot(s)"),
-								SAssignNew(MaterialSlotsBox, SEditableTextBox)
-								.Text(FText::FromString(TEXT("0")))
-								.HintText(LOCTEXT("MaterialElementIndicesHint", "Single: 12    Multiple: 12,13")))
+							MakeMaterialSlotsRow()
 						]
 						+ SVerticalBox::Slot()
 						.AutoHeight()
@@ -454,6 +465,52 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeBlueprintPickerRow(const FT
 		];
 }
 
+TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialSlotsRow()
+{
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		[
+			SNew(SBox)
+			.WidthOverride(150)
+			[
+				SNew(STextBlock).Text(LOCTEXT("MaterialElementIndices", "Material Slot(s)"))
+			]
+		]
+		+ SHorizontalBox::Slot()
+		.FillWidth(1.0f)
+		[
+			SAssignNew(MaterialSlotsBox, SEditableTextBox)
+			.Text(FText::FromString(TEXT("0")))
+			.HintText(LOCTEXT("MaterialElementIndicesHint", "Single: 12    Multiple: 12,13"))
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.Padding(6, 0, 0, 0)
+		[
+			SNew(SButton)
+			.ToolTipText(LOCTEXT("AnalyzeMaterialsTooltip", "Group the selected Anim Blueprint preview mesh slots by material."))
+			.OnClicked(this, &SHTBlueprintToggleToolPanel::OnAnalyzeMaterialsClicked)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(0, 0, 4, 0)
+				[
+					SNew(SImage).Image(FAppStyle::GetBrush("Icons.Search"))
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				[
+					SNew(STextBlock).Text(LOCTEXT("AnalyzeMaterials", "Analyze"))
+				]
+			]
+		];
+}
+
 TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialPickerRow()
 {
 	return SNew(SHorizontalBox)
@@ -477,6 +534,222 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialPickerRow()
 			.ObjectPath(this, &SHTBlueprintToggleToolPanel::GetSourceMaterialPath)
 			.OnObjectChanged(this, &SHTBlueprintToggleToolPanel::OnSourceMaterialChanged)
 		];
+}
+
+bool SHTBlueprintToggleToolPanel::BuildMaterialSlotGroups(FString& OutMeshName, FString& OutError)
+{
+	MaterialSlotGroups.Reset();
+
+	UAnimBlueprint* AnimBlueprint = LoadObject<UAnimBlueprint>(nullptr, *AnimBlueprintPath);
+	if (!AnimBlueprint)
+	{
+		OutError = TEXT("The selected Anim Blueprint could not be loaded.");
+		return false;
+	}
+
+	USkeletalMesh* SkeletalMesh = AnimBlueprint->GetPreviewMesh(false);
+	if (!SkeletalMesh && AnimBlueprint->TargetSkeleton)
+	{
+		SkeletalMesh = AnimBlueprint->TargetSkeleton->GetPreviewMesh(true);
+	}
+	if (!SkeletalMesh)
+	{
+		OutError = TEXT("The selected Anim Blueprint has no preview Skeletal Mesh. Set a Preview Mesh in the Animation Blueprint editor first.");
+		return false;
+	}
+
+	OutMeshName = SkeletalMesh->GetName();
+	TMap<UMaterialInterface*, int32> GroupByMaterial;
+	const TArray<FSkeletalMaterial>& Materials = SkeletalMesh->GetMaterials();
+	for (int32 SlotIndex = 0; SlotIndex < Materials.Num(); ++SlotIndex)
+	{
+		UMaterialInterface* Material = Materials[SlotIndex].MaterialInterface;
+		if (!Material)
+		{
+			continue;
+		}
+
+		int32* ExistingGroupIndex = GroupByMaterial.Find(Material);
+		if (!ExistingGroupIndex)
+		{
+			FMaterialSlotGroup& NewGroup = MaterialSlotGroups.AddDefaulted_GetRef();
+			NewGroup.Material = Material;
+			const int32 NewGroupIndex = MaterialSlotGroups.Num() - 1;
+			GroupByMaterial.Add(Material, NewGroupIndex);
+			ExistingGroupIndex = GroupByMaterial.Find(Material);
+		}
+		MaterialSlotGroups[*ExistingGroupIndex].SlotIndices.Add(SlotIndex);
+	}
+
+	if (MaterialSlotGroups.IsEmpty())
+	{
+		OutError = FString::Printf(TEXT("Skeletal Mesh %s has no assigned materials."), *OutMeshName);
+		return false;
+	}
+	return true;
+}
+
+TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialGroupRow(const int32 GroupIndex)
+{
+	const FMaterialSlotGroup& Group = MaterialSlotGroups[GroupIndex];
+	UMaterialInterface* Material = Group.Material.Get();
+	const FString MaterialName = GetNameSafe(Material);
+	const FString MaterialPath = Material ? Material->GetPathName() : FString(TEXT("None"));
+	const FString SlotList = HTTogglePanel::JoinSlotIndices(Group.SlotIndices, TEXT(", "));
+
+	TSharedPtr<FAssetThumbnail> Thumbnail = MakeShared<FAssetThumbnail>(FAssetData(Material), 56, 56, MaterialThumbnailPool);
+	MaterialGroupThumbnails.Add(Thumbnail);
+
+	return SNew(SButton)
+		.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+		.ToolTipText(FText::Format(LOCTEXT("SelectMaterialGroupTooltip", "Use slots {0} and material {1}."), FText::FromString(SlotList), FText::FromString(MaterialName)))
+		.OnClicked(this, &SHTBlueprintToggleToolPanel::OnSelectMaterialGroupClicked, GroupIndex)
+		.ContentPadding(FMargin(8, 5))
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(0, 0, 10, 0)
+			[
+				SNew(SBox)
+				.WidthOverride(56)
+				.HeightOverride(56)
+				[
+					Thumbnail->MakeThumbnailWidget()
+				]
+			]
+			+ SHorizontalBox::Slot()
+			.FillWidth(1.0f)
+			.VAlign(VAlign_Center)
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString(MaterialName))
+					.Font(FAppStyle::GetFontStyle("DetailsView.CategoryFontStyle"))
+				]
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				.Padding(0, 2, 0, 0)
+				[
+					SNew(STextBlock)
+					.Text(FText::Format(LOCTEXT("MaterialGroupSlots", "Slots: {0}"), FText::FromString(SlotList)))
+				]
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				.Padding(0, 2, 0, 0)
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString(MaterialPath))
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				]
+			]
+		];
+}
+
+FReply SHTBlueprintToggleToolPanel::OnAnalyzeMaterialsClicked()
+{
+	FString MeshName;
+	FString Error;
+	if (!BuildMaterialSlotGroups(MeshName, Error))
+	{
+		ShowPanelError(FText::FromString(Error));
+		return FReply::Handled();
+	}
+
+	MaterialGroupThumbnails.Reset();
+	MaterialThumbnailPool = MakeShared<FAssetThumbnailPool>(64);
+	TSharedRef<SVerticalBox> GroupList = SNew(SVerticalBox);
+	for (int32 GroupIndex = 0; GroupIndex < MaterialSlotGroups.Num(); ++GroupIndex)
+	{
+		GroupList->AddSlot()
+		.AutoHeight()
+		.Padding(0, 0, 0, 3)
+		[
+			MakeMaterialGroupRow(GroupIndex)
+		];
+	}
+
+	TSharedRef<SWindow> Window = SNew(SWindow)
+		.Title(LOCTEXT("MaterialAnalysisTitle", "HT Material Slot Analysis"))
+		.ClientSize(FVector2D(760.0f, 620.0f))
+		.SupportsMaximize(true)
+		.SupportsMinimize(false)
+		.SizingRule(ESizingRule::UserSized);
+	MaterialAnalysisWindow = Window;
+	Window->SetContent(
+		SNew(SBorder)
+		.Padding(14)
+		.BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(0, 0, 0, 4)
+			[
+				SNew(STextBlock)
+				.Text(FText::Format(LOCTEXT("AnalyzedMesh", "Skeletal Mesh: {0}"), FText::FromString(MeshName)))
+				.Font(FAppStyle::GetFontStyle("DetailsView.CategoryFontStyle"))
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(0, 0, 0, 10)
+			[
+				SNew(STextBlock)
+				.Text(FText::Format(LOCTEXT("MaterialGroupCount", "{0} material groups. Select one to fill Material Slot(s) and Source Material."), FText::AsNumber(MaterialSlotGroups.Num())))
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			]
+			+ SVerticalBox::Slot()
+			.FillHeight(1.0f)
+			[
+				SNew(SScrollBox)
+				+ SScrollBox::Slot()
+				[
+					GroupList
+				]
+			]
+		]);
+
+	FSlateApplication::Get().AddModalWindow(Window, SharedThis(this));
+	MaterialAnalysisWindow.Reset();
+	MaterialGroupThumbnails.Reset();
+	MaterialThumbnailPool.Reset();
+	return FReply::Handled();
+}
+
+FReply SHTBlueprintToggleToolPanel::OnSelectMaterialGroupClicked(const int32 GroupIndex)
+{
+	if (!MaterialSlotGroups.IsValidIndex(GroupIndex) || !MaterialSlotsBox.IsValid())
+	{
+		return FReply::Handled();
+	}
+
+	const FMaterialSlotGroup& Group = MaterialSlotGroups[GroupIndex];
+	UMaterialInterface* Material = Group.Material.Get();
+	if (!Material)
+	{
+		ShowPanelError(LOCTEXT("MaterialGroupMissing", "The selected material is no longer available."));
+		return FReply::Handled();
+	}
+
+	const FString SlotList = HTTogglePanel::JoinSlotIndices(Group.SlotIndices);
+	MaterialSlotsBox->SetText(FText::FromString(SlotList));
+	SourceMaterialPath = Material->GetPathName();
+	if (StatusText.IsValid())
+	{
+		StatusText->SetText(FText::Format(
+			LOCTEXT("MaterialGroupSelected", "Selected material {0}; slots: {1}"),
+			FText::FromString(Material->GetName()),
+			FText::FromString(SlotList)));
+	}
+	if (MaterialAnalysisWindow.IsValid())
+	{
+		MaterialAnalysisWindow.Pin()->RequestDestroyWindow();
+	}
+	return FReply::Handled();
 }
 
 TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTexturePickerRow(int32 TextureIndex)
