@@ -16,6 +16,7 @@
 #include "SHTCookedAssetExporter.h"
 #include "SHTMaterialInstanceCreator.h"
 #include "Styling/AppStyle.h"
+#include "ThumbnailRendering/ThumbnailManager.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
@@ -599,6 +600,13 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialGroupRow(const int3
 
 	TSharedPtr<FAssetThumbnail> Thumbnail = MakeShared<FAssetThumbnail>(FAssetData(Material), 56, 56, MaterialThumbnailPool);
 	MaterialGroupThumbnails.Add(Thumbnail);
+	Thumbnail->RefreshThumbnail();
+	Thumbnail->SetRealTime(true);
+	Thumbnail->GetViewportRenderTargetTexture();
+
+	FAssetThumbnailConfig ThumbnailConfig;
+	ThumbnailConfig.ThumbnailLabel = EThumbnailLabel::NoLabel;
+	ThumbnailConfig.bAllowRealTimeOnHovered = false;
 
 	return SNew(SButton)
 		.ButtonStyle(FAppStyle::Get(), "SimpleButton")
@@ -616,7 +624,7 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialGroupRow(const int3
 				.WidthOverride(56)
 				.HeightOverride(56)
 				[
-					Thumbnail->MakeThumbnailWidget()
+					Thumbnail->MakeThumbnailWidget(ThumbnailConfig)
 				]
 			]
 			+ SHorizontalBox::Slot()
@@ -661,7 +669,11 @@ FReply SHTBlueprintToggleToolPanel::OnAnalyzeMaterialsClicked()
 	}
 
 	MaterialGroupThumbnails.Reset();
-	MaterialThumbnailPool = MakeShared<FAssetThumbnailPool>(64);
+	MaterialThumbnailPool = UThumbnailManager::Get().GetSharedThumbnailPool();
+	if (!MaterialThumbnailPool.IsValid())
+	{
+		MaterialThumbnailPool = MakeShared<FAssetThumbnailPool>(64);
+	}
 	TSharedRef<SVerticalBox> GroupList = SNew(SVerticalBox);
 	for (int32 GroupIndex = 0; GroupIndex < MaterialSlotGroups.Num(); ++GroupIndex)
 	{
@@ -713,11 +725,23 @@ FReply SHTBlueprintToggleToolPanel::OnAnalyzeMaterialsClicked()
 			]
 		]);
 
+	RegisterActiveTimer(0.0f, FWidgetActiveTimerDelegate::CreateSP(this, &SHTBlueprintToggleToolPanel::TickMaterialThumbnailPool));
 	FSlateApplication::Get().AddModalWindow(Window, SharedThis(this));
 	MaterialAnalysisWindow.Reset();
 	MaterialGroupThumbnails.Reset();
 	MaterialThumbnailPool.Reset();
 	return FReply::Handled();
+}
+
+EActiveTimerReturnType SHTBlueprintToggleToolPanel::TickMaterialThumbnailPool(double InCurrentTime, float InDeltaTime)
+{
+	if (!MaterialAnalysisWindow.IsValid() || !MaterialThumbnailPool.IsValid())
+	{
+		return EActiveTimerReturnType::Stop;
+	}
+
+	MaterialThumbnailPool->Tick(InDeltaTime);
+	return EActiveTimerReturnType::Continue;
 }
 
 FReply SHTBlueprintToggleToolPanel::OnSelectMaterialGroupClicked(const int32 GroupIndex)

@@ -6,9 +6,10 @@
 
 - 生成单个或多个材质区域的显示/隐藏蓝图。
 - 生成单材质槽或多材质槽的多贴图循环切换蓝图。
-- 支持普通按键、符号按键以及 `ctrl`、`shift`、`alt` 组合按键。
-- 自动创建动画蓝图变量、SaveGame 变量、读取与保存逻辑。
-- 根据选定材质创建并配置材质实例。
+- 支持普通按键、符号按键，以及 `ctrl`、`shift`、`alt` 组合按键。
+- 根据 Anim Variable 自动创建动画蓝图变量、SaveGame 变量、读取与保存逻辑。
+- 在贴图切换模式中分析当前 AnimBP 预览骨骼网格体的材质槽，并按材质分组填入 Material Slot(s)。
+- 根据选定材质创建四贴图材质实例。
 - 从工程资产列表中选择需要导出的 Cooked 文件，并保持原目录结构。
 - 可选择导出后启动外部打包器。
 - 可选择导出后打开实际导出的角色目录。
@@ -18,7 +19,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.4.zip
+   HTToggleTool-v1.5.5.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -30,14 +31,43 @@
 
 4. 打开工程，在 `Tools > HT Blueprint Toggle Tool` 启动插件。
 
-发布包仅包含 UE 5.6 Win64 编辑器运行所需文件，不包含 `Source` 和 PDB。自行编译源码时需要 Visual Studio 2022 C++ 工具链。
+发布包只包含 UE 5.6 Win64 编辑器运行所需文件，不包含 `Source` 和 PDB。自行编译源码时需要 Visual Studio 2022 C++ 工具链。
+
+## 蓝图切换
+
+在 `Settings` 中选择动画蓝图和 SaveGame 蓝图，选择结果会保存到当前工程配置中，关闭并重新打开工具后仍会保留。
+
+`Function Switch` 可切换功能：
+
+- `Material visibility`：材质区域显示/隐藏。
+- `Texture switch`：材质贴图循环切换。
+- `Material Instance`：重建材质节点并创建材质实例。
+
+在 `Texture switch` 模式中点击 `Material Slot(s)` 右侧的 `Analyze`，插件会分析当前 AnimBP 的预览骨骼网格体，把使用同一个材质的 Slot 分到同一组。选择某一组后，会自动填写该组的全部 Slot ID，并同步填写 `Source Material`。
+
+示例：
+
+```text
+Material ID(s): 13,20
+Material Slot(s): 12,13
+Key: ctrl 6
+Key: shift 6
+Key: alt 6
+```
+
+SaveGame 命名由 `Anim Variable` 自动派生：
+
+```text
+Save Variable = AnimVariable + Save
+Save Slot = AnimVariable
+```
 
 ## 材质实例工具
 
 在主面板的 `Function Switch` 一行点击 `Material Instance`。
 
 1. 选择需要修改的 `Material`。
-2. `Instance Name` 默认使用原材质名称加 `_Inst`，也可以手动修改。
+2. `Instance Name` 默认使用原材质名加 `_Inst`，也可以手动修改。
 3. 分别选择四张贴图：
 
    ```text
@@ -49,7 +79,7 @@
 
 4. 点击 `Rebuild Material and Create Instance`。
 
-执行时会先删除选定材质中的全部节点，再从零创建下列节点和连线。请不要对需要保留原节点的材质直接执行。
+执行时会先删除选定材质中的全部节点，再重新创建所需节点和连线。请不要对需要保留原节点的材质直接执行。
 
 工具会重新创建以下材质参数节点：
 
@@ -70,47 +100,9 @@
 
 已存在的同名材质实例会被更新，不会重复创建。
 
-## 蓝图切换
-
-在 `Settings` 中选择动画蓝图和 SaveGame 蓝图，然后在主面板选择：
-
-选定的两个蓝图路径会立即保存到当前工程的编辑器配置中，关闭并重新打开工具后仍会保留。
-
-- `Material visibility`：材质区域显示/隐藏。
-- `Texture switch`：材质贴图循环切换。
-
-在 `Texture switch` 模式中点击 `Material Slot(s)` 右侧的 `Analyze`，插件会分析当前 AnimBP 的预览骨骼网格体，按材质对 Slot 分组。选择一组后会自动填写该组的全部 Slot ID，并同步填写 `Source Material`。
-
-多材质区域示例：
-
-```text
-Material ID(s): 13,20
-```
-
-多材质槽同步切换示例：
-
-```text
-Material Slot(s): 12,13
-```
-
-组合按键示例：
-
-```text
-ctrl 6
-shift 6
-alt 6
-```
-
-SaveGame 命名由 `Anim Variable` 自动派生：
-
-```text
-Save Variable = AnimVariable + Save
-Save Slot = AnimVariable
-```
-
 ## Cooked 资产导出
 
-点击主面板右上角的 `Cooked Assets`：
+点击主面板右上角的 `Cooked Assets`。
 
 1. `Cooked source` 选择角色的 Cooked 目录。
 2. `Output directory` 选择外部打包器中的角色父目录。
@@ -123,7 +115,7 @@ Save Slot = AnimVariable
 - `Export and package`：导出成功后启动外部打包器。
 - `Open output directory after export`：复制成功后打开实际导出的角色目录。
 
-目录、资产勾选和两个导出选项都会保存在当前工程的编辑器配置中。
+目录、资产勾选和导出选项都会保存到当前工程的编辑器配置中。
 
 选择一个 `.uasset` 时，插件会自动携带存在的同名文件：
 

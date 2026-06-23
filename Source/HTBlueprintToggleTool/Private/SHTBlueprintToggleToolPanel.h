@@ -41,6 +41,7 @@ private:
 	FReply OnRemoveTextureClicked(int32 TextureIndex);
 	FReply OnAnalyzeMaterialsClicked();
 	FReply OnSelectMaterialGroupClicked(int32 GroupIndex);
+	EActiveTimerReturnType TickMaterialThumbnailPool(double InCurrentTime, float InDeltaTime);
 
 	bool ParseMaterialIDs(TArray<int32>& OutMaterialIDs, FString& OutError) const;
 	bool ParseTextureMaterialSlots(TArray<int32>& OutMaterialSlots, FString& OutError) const;

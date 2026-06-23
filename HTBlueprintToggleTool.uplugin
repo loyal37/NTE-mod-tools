@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 19,
-	"VersionName": "1.5.4",
+	"Version": 20,
+	"VersionName": "1.5.5",
 	"FriendlyName": "HT Blueprint Toggle Tool",
 	"Description": "Editor tools for generating Blueprint toggles, building four-texture material instances, and exporting selected cooked assets.",
 	"Category": "HT",
