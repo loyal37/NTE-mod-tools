@@ -60,6 +60,82 @@ namespace HTTogglePanel
 		}
 		return FString::Join(Values, *Separator);
 	}
+
+	static int32 GetTexturePreviewPriority(const FName ParameterName)
+	{
+		const FString LowerName = ParameterName.ToString().ToLower();
+		if (LowerName.Contains(TEXT("basecolor")) || LowerName.Contains(TEXT("diffuse")))
+		{
+			return 0;
+		}
+		if (LowerName.Contains(TEXT("albedo")) || LowerName.Contains(TEXT("_d")) || LowerName.EndsWith(TEXT("d")))
+		{
+			return 1;
+		}
+		if (LowerName.Contains(TEXT("light")) || LowerName.Contains(TEXT("_m")) || LowerName.EndsWith(TEXT("m")))
+		{
+			return 2;
+		}
+		if (LowerName.Contains(TEXT("id")))
+		{
+			return 3;
+		}
+		if (LowerName.Contains(TEXT("normal")) || LowerName.Contains(TEXT("_n")) || LowerName.EndsWith(TEXT("n")))
+		{
+			return 4;
+		}
+		return 10;
+	}
+
+	static UTexture* FindMaterialPreviewTexture(UMaterialInterface* Material, FString& OutPreviewText)
+	{
+		if (!Material)
+		{
+			return nullptr;
+		}
+
+		TArray<FMaterialParameterInfo> TextureParameters;
+		TArray<FGuid> TextureParameterIds;
+		Material->GetAllTextureParameterInfo(TextureParameters, TextureParameterIds);
+
+		UTexture* BestTexture = nullptr;
+		FName BestParameterName;
+		int32 BestPriority = TNumericLimits<int32>::Max();
+
+		for (const FMaterialParameterInfo& ParameterInfo : TextureParameters)
+		{
+			UTexture* Texture = nullptr;
+			if (!Material->GetTextureParameterValue(ParameterInfo, Texture) || !Texture)
+			{
+				continue;
+			}
+
+			const int32 Priority = GetTexturePreviewPriority(ParameterInfo.Name);
+			if (!BestTexture || Priority < BestPriority)
+			{
+				BestTexture = Texture;
+				BestParameterName = ParameterInfo.Name;
+				BestPriority = Priority;
+			}
+		}
+
+		if (!BestTexture)
+		{
+			TArray<UTexture*> BaseColorTextures;
+			TArray<FName> BaseColorTextureNames;
+			if (Material->GetTexturesInPropertyChain(MP_BaseColor, BaseColorTextures, &BaseColorTextureNames, nullptr) && BaseColorTextures.Num() > 0)
+			{
+				BestTexture = BaseColorTextures[0];
+				BestParameterName = BaseColorTextureNames.IsValidIndex(0) ? BaseColorTextureNames[0] : FName(TEXT("BaseColor"));
+			}
+		}
+
+		if (BestTexture)
+		{
+			OutPreviewText = FString::Printf(TEXT("Preview: %s (%s)"), *BestTexture->GetName(), *BestParameterName.ToString());
+		}
+		return BestTexture;
+	}
 }
 
 void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
@@ -597,8 +673,14 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialGroupRow(const int3
 	const FString MaterialName = GetNameSafe(Material);
 	const FString MaterialPath = Material ? Material->GetPathName() : FString(TEXT("None"));
 	const FString SlotList = HTTogglePanel::JoinSlotIndices(Group.SlotIndices, TEXT(", "));
+	FString PreviewText;
+	UObject* ThumbnailAsset = HTTogglePanel::FindMaterialPreviewTexture(Material, PreviewText);
+	if (!ThumbnailAsset)
+	{
+		ThumbnailAsset = Material;
+	}
 
-	TSharedPtr<FAssetThumbnail> Thumbnail = MakeShared<FAssetThumbnail>(FAssetData(Material), 56, 56, MaterialThumbnailPool);
+	TSharedPtr<FAssetThumbnail> Thumbnail = MakeShared<FAssetThumbnail>(FAssetData(ThumbnailAsset), 56, 56, MaterialThumbnailPool);
 	MaterialGroupThumbnails.Add(Thumbnail);
 	Thumbnail->RefreshThumbnail();
 	Thumbnail->SetRealTime(true);
@@ -645,6 +727,15 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialGroupRow(const int3
 				[
 					SNew(STextBlock)
 					.Text(FText::Format(LOCTEXT("MaterialGroupSlots", "Slots: {0}"), FText::FromString(SlotList)))
+				]
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				.Padding(0, 2, 0, 0)
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString(PreviewText))
+					.Visibility(PreviewText.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 				]
 				+ SVerticalBox::Slot()
 				.AutoHeight()

@@ -19,7 +19,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.5.zip
+   HTToggleTool-v1.5.6.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -43,7 +43,7 @@
 - `Texture switch`：材质贴图循环切换。
 - `Material Instance`：重建材质节点并创建材质实例。
 
-在 `Texture switch` 模式中点击 `Material Slot(s)` 右侧的 `Analyze`，插件会分析当前 AnimBP 的预览骨骼网格体，把使用同一个材质的 Slot 分到同一组。选择某一组后，会自动填写该组的全部 Slot ID，并同步填写 `Source Material`。
+在 `Texture switch` 模式中点击 `Material Slot(s)` 右侧的 `Analyze`，插件会分析当前 AnimBP 的预览骨骼网格体，把使用同一个材质的 Slot 分到同一组。选择某一组后，会自动填写该组的全部 Slot ID，并同步填写 `Source Material`。分组列表会优先显示材质参数中的 BaseColor/Diffuse 贴图缩略图，便于区分不同材质。
 
 示例：
 
