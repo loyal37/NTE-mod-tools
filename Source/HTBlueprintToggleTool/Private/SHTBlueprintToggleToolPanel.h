@@ -10,8 +10,7 @@ class STextBlock;
 class SVerticalBox;
 class SWindow;
 class SWidgetSwitcher;
-class FAssetThumbnail;
-class FAssetThumbnailPool;
+class ISlateViewport;
 class UMaterialInterface;
 struct FAssetData;
 
@@ -22,6 +21,7 @@ public:
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
+	void OpenMaterialAnalysisFromCommand();
 
 private:
 	FReply OnGenerateClicked();
@@ -41,7 +41,6 @@ private:
 	FReply OnRemoveTextureClicked(int32 TextureIndex);
 	FReply OnAnalyzeMaterialsClicked();
 	FReply OnSelectMaterialGroupClicked(int32 GroupIndex);
-	EActiveTimerReturnType TickMaterialThumbnailPool(double InCurrentTime, float InDeltaTime);
 
 	bool ParseMaterialIDs(TArray<int32>& OutMaterialIDs, FString& OutError) const;
 	bool ParseTextureMaterialSlots(TArray<int32>& OutMaterialSlots, FString& OutError) const;
@@ -76,8 +75,7 @@ private:
 	TWeakPtr<SWindow> MaterialAnalysisWindow;
 	TWeakPtr<SWindow> SettingsWindow;
 	TArray<FMaterialSlotGroup> MaterialSlotGroups;
-	TArray<TSharedPtr<FAssetThumbnail>> MaterialGroupThumbnails;
-	TSharedPtr<FAssetThumbnailPool> MaterialThumbnailPool;
+	TArray<TSharedPtr<ISlateViewport>> MaterialGroupRenderedThumbnails;
 	TSharedPtr<SEditableTextBox> ToggleVariableBox;
 	TSharedPtr<SEditableTextBox> KeyNameBox;
 	TSharedPtr<SEditableTextBox> MaterialIDsBox;

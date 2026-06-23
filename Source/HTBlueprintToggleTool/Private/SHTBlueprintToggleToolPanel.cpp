@@ -3,7 +3,6 @@
 #include "Animation/AnimBlueprint.h"
 #include "Animation/Skeleton.h"
 #include "AssetRegistry/AssetData.h"
-#include "AssetThumbnail.h"
 #include "Engine/Blueprint.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/Texture2D.h"
@@ -11,12 +10,17 @@
 #include "Framework/Notifications/NotificationManager.h"
 #include "HTBlueprintToggleGenerator.h"
 #include "Materials/MaterialInterface.h"
+#include "Misc/ObjectThumbnail.h"
 #include "Misc/ConfigCacheIni.h"
+#include "ObjectTools.h"
 #include "PropertyCustomizationHelpers.h"
+#include "Rendering/RenderingCommon.h"
+#include "RenderingThread.h"
 #include "SHTCookedAssetExporter.h"
 #include "SHTMaterialInstanceCreator.h"
 #include "Styling/AppStyle.h"
-#include "ThumbnailRendering/ThumbnailManager.h"
+#include "Slate/SlateTextures.h"
+#include "Textures/SlateTextureData.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
@@ -29,6 +33,7 @@
 #include "Widgets/Layout/SUniformGridPanel.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/Notifications/SNotificationList.h"
+#include "Widgets/SViewport.h"
 #include "Widgets/SWindow.h"
 #include "Widgets/Text/STextBlock.h"
 
@@ -61,81 +66,72 @@ namespace HTTogglePanel
 		return FString::Join(Values, *Separator);
 	}
 
-	static int32 GetTexturePreviewPriority(const FName ParameterName)
+	class FRenderedMaterialThumbnailViewport final : public ISlateViewport
 	{
-		const FString LowerName = ParameterName.ToString().ToLower();
-		if (LowerName.Contains(TEXT("basecolor")) || LowerName.Contains(TEXT("diffuse")))
+	public:
+		FRenderedMaterialThumbnailViewport(UObject* MaterialAsset, const uint32 InSize)
+			: Size(static_cast<int32>(InSize), static_cast<int32>(InSize))
 		{
-			return 0;
-		}
-		if (LowerName.Contains(TEXT("albedo")) || LowerName.Contains(TEXT("_d")) || LowerName.EndsWith(TEXT("d")))
-		{
-			return 1;
-		}
-		if (LowerName.Contains(TEXT("light")) || LowerName.Contains(TEXT("_m")) || LowerName.EndsWith(TEXT("m")))
-		{
-			return 2;
-		}
-		if (LowerName.Contains(TEXT("id")))
-		{
-			return 3;
-		}
-		if (LowerName.Contains(TEXT("normal")) || LowerName.Contains(TEXT("_n")) || LowerName.EndsWith(TEXT("n")))
-		{
-			return 4;
-		}
-		return 10;
-	}
-
-	static UTexture* FindMaterialPreviewTexture(UMaterialInterface* Material, FString& OutPreviewText)
-	{
-		if (!Material)
-		{
-			return nullptr;
-		}
-
-		TArray<FMaterialParameterInfo> TextureParameters;
-		TArray<FGuid> TextureParameterIds;
-		Material->GetAllTextureParameterInfo(TextureParameters, TextureParameterIds);
-
-		UTexture* BestTexture = nullptr;
-		FName BestParameterName;
-		int32 BestPriority = TNumericLimits<int32>::Max();
-
-		for (const FMaterialParameterInfo& ParameterInfo : TextureParameters)
-		{
-			UTexture* Texture = nullptr;
-			if (!Material->GetTextureParameterValue(ParameterInfo, Texture) || !Texture)
+			if (!MaterialAsset)
 			{
-				continue;
+				return;
 			}
 
-			const int32 Priority = GetTexturePreviewPriority(ParameterInfo.Name);
-			if (!BestTexture || Priority < BestPriority)
+			FObjectThumbnail ObjectThumbnail;
+			ThumbnailTools::RenderThumbnail(
+				MaterialAsset,
+				InSize,
+				InSize,
+				ThumbnailTools::EThumbnailTextureFlushMode::NeverFlush,
+				nullptr,
+				&ObjectThumbnail);
+
+			const FImageView Image = ObjectThumbnail.GetImage();
+			if (!Image.RawData || Image.SizeX <= 0 || Image.SizeY <= 0)
 			{
-				BestTexture = Texture;
-				BestParameterName = ParameterInfo.Name;
-				BestPriority = Priority;
+				return;
+			}
+
+			TSharedPtr<FSlateTextureData, ESPMode::ThreadSafe> TextureData = MakeShared<FSlateTextureData, ESPMode::ThreadSafe>(Image);
+			Texture = MakeUnique<FSlateTexture2DRHIRef>(
+				TextureData->GetWidth(),
+				TextureData->GetHeight(),
+				PF_B8G8R8A8,
+				TextureData,
+				TexCreate_SRGB);
+			BeginInitResource(Texture.Get());
+			FlushRenderingCommands();
+		}
+
+		virtual ~FRenderedMaterialThumbnailViewport() override
+		{
+			if (Texture)
+			{
+				BeginReleaseResource(Texture.Get());
+				FlushRenderingCommands();
+				Texture.Reset();
 			}
 		}
 
-		if (!BestTexture)
+		virtual FIntPoint GetSize() const override
 		{
-			TArray<UTexture*> BaseColorTextures;
-			TArray<FName> BaseColorTextureNames;
-			if (Material->GetTexturesInPropertyChain(MP_BaseColor, BaseColorTextures, &BaseColorTextureNames, nullptr) && BaseColorTextures.Num() > 0)
-			{
-				BestTexture = BaseColorTextures[0];
-				BestParameterName = BaseColorTextureNames.IsValidIndex(0) ? BaseColorTextureNames[0] : FName(TEXT("BaseColor"));
-			}
+			return Size;
 		}
 
-		if (BestTexture)
+		virtual FSlateShaderResource* GetViewportRenderTargetTexture() const override
 		{
-			OutPreviewText = FString::Printf(TEXT("Preview: %s (%s)"), *BestTexture->GetName(), *BestParameterName.ToString());
+			return Texture && Texture->IsValid() ? Texture.Get() : nullptr;
 		}
-		return BestTexture;
-	}
+
+		virtual bool RequiresVsync() const override
+		{
+			return false;
+		}
+
+	private:
+		FIntPoint Size;
+		TUniquePtr<FSlateTexture2DRHIRef> Texture;
+	};
 }
 
 void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
@@ -497,6 +493,12 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 	RebuildTextureRows();
 }
 
+void SHTBlueprintToggleToolPanel::OpenMaterialAnalysisFromCommand()
+{
+	OnToggleModeChanged(EHTBlueprintToggleMode::Texture);
+	OnAnalyzeMaterialsClicked();
+}
+
 TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTextRow(const FText& Label, const TSharedRef<SEditableTextBox>& TextBox) const
 {
 	return SNew(SHorizontalBox)
@@ -673,22 +675,9 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialGroupRow(const int3
 	const FString MaterialName = GetNameSafe(Material);
 	const FString MaterialPath = Material ? Material->GetPathName() : FString(TEXT("None"));
 	const FString SlotList = HTTogglePanel::JoinSlotIndices(Group.SlotIndices, TEXT(", "));
-	FString PreviewText;
-	UObject* ThumbnailAsset = HTTogglePanel::FindMaterialPreviewTexture(Material, PreviewText);
-	if (!ThumbnailAsset)
-	{
-		ThumbnailAsset = Material;
-	}
-
-	TSharedPtr<FAssetThumbnail> Thumbnail = MakeShared<FAssetThumbnail>(FAssetData(ThumbnailAsset), 56, 56, MaterialThumbnailPool);
-	MaterialGroupThumbnails.Add(Thumbnail);
-	Thumbnail->RefreshThumbnail();
-	Thumbnail->SetRealTime(true);
-	Thumbnail->GetViewportRenderTargetTexture();
-
-	FAssetThumbnailConfig ThumbnailConfig;
-	ThumbnailConfig.ThumbnailLabel = EThumbnailLabel::NoLabel;
-	ThumbnailConfig.bAllowRealTimeOnHovered = false;
+	constexpr uint32 ThumbnailSize = 64;
+	TSharedPtr<ISlateViewport> ThumbnailViewport = MakeShared<HTTogglePanel::FRenderedMaterialThumbnailViewport>(Material, ThumbnailSize);
+	MaterialGroupRenderedThumbnails.Add(ThumbnailViewport);
 
 	return SNew(SButton)
 		.ButtonStyle(FAppStyle::Get(), "SimpleButton")
@@ -703,10 +692,14 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialGroupRow(const int3
 			.Padding(0, 0, 10, 0)
 			[
 				SNew(SBox)
-				.WidthOverride(56)
-				.HeightOverride(56)
+				.WidthOverride(64)
+				.HeightOverride(64)
 				[
-					Thumbnail->MakeThumbnailWidget(ThumbnailConfig)
+					SNew(SViewport)
+					.EnableGammaCorrection(true)
+					.IgnoreTextureAlpha(false)
+					.ViewportSize(FVector2D(ThumbnailSize, ThumbnailSize))
+					.ViewportInterface(ThumbnailViewport)
 				]
 			]
 			+ SHorizontalBox::Slot()
@@ -733,15 +726,6 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialGroupRow(const int3
 				.Padding(0, 2, 0, 0)
 				[
 					SNew(STextBlock)
-					.Text(FText::FromString(PreviewText))
-					.Visibility(PreviewText.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible)
-					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
-				]
-				+ SVerticalBox::Slot()
-				.AutoHeight()
-				.Padding(0, 2, 0, 0)
-				[
-					SNew(STextBlock)
 					.Text(FText::FromString(MaterialPath))
 					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 				]
@@ -759,12 +743,7 @@ FReply SHTBlueprintToggleToolPanel::OnAnalyzeMaterialsClicked()
 		return FReply::Handled();
 	}
 
-	MaterialGroupThumbnails.Reset();
-	MaterialThumbnailPool = UThumbnailManager::Get().GetSharedThumbnailPool();
-	if (!MaterialThumbnailPool.IsValid())
-	{
-		MaterialThumbnailPool = MakeShared<FAssetThumbnailPool>(64);
-	}
+	MaterialGroupRenderedThumbnails.Reset();
 	TSharedRef<SVerticalBox> GroupList = SNew(SVerticalBox);
 	for (int32 GroupIndex = 0; GroupIndex < MaterialSlotGroups.Num(); ++GroupIndex)
 	{
@@ -816,23 +795,10 @@ FReply SHTBlueprintToggleToolPanel::OnAnalyzeMaterialsClicked()
 			]
 		]);
 
-	RegisterActiveTimer(0.0f, FWidgetActiveTimerDelegate::CreateSP(this, &SHTBlueprintToggleToolPanel::TickMaterialThumbnailPool));
 	FSlateApplication::Get().AddModalWindow(Window, SharedThis(this));
 	MaterialAnalysisWindow.Reset();
-	MaterialGroupThumbnails.Reset();
-	MaterialThumbnailPool.Reset();
+	MaterialGroupRenderedThumbnails.Reset();
 	return FReply::Handled();
-}
-
-EActiveTimerReturnType SHTBlueprintToggleToolPanel::TickMaterialThumbnailPool(double InCurrentTime, float InDeltaTime)
-{
-	if (!MaterialAnalysisWindow.IsValid() || !MaterialThumbnailPool.IsValid())
-	{
-		return EActiveTimerReturnType::Stop;
-	}
-
-	MaterialThumbnailPool->Tick(InDeltaTime);
-	return EActiveTimerReturnType::Continue;
 }
 
 FReply SHTBlueprintToggleToolPanel::OnSelectMaterialGroupClicked(const int32 GroupIndex)
