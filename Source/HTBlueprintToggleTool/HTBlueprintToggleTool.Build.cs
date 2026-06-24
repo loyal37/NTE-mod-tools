@@ -12,6 +12,7 @@ public class HTBlueprintToggleTool : ModuleRules
 				"AssetTools",
 				"AssetRegistry",
 				"BlueprintGraph",
+				"ContentBrowser",
 				"Core",
 				"CoreUObject",
 				"DesktopPlatform",

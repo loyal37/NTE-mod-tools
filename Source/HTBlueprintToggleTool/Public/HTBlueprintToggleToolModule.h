@@ -16,10 +16,12 @@ public:
 private:
 	void RegisterMenus();
 	void OpenMaterialAnalysisWindow();
+	void OpenMaterialSlotMapperWindow();
 	TSharedRef<class SDockTab> SpawnPluginTab(const class FSpawnTabArgs& SpawnTabArgs);
 
 	static const FName ToolTabName;
 	TWeakPtr<SHTBlueprintToggleToolPanel> ActivePanel;
 	TUniquePtr<FAutoConsoleCommand> OpenWindowConsoleCommand;
 	TUniquePtr<FAutoConsoleCommand> OpenMaterialAnalysisConsoleCommand;
+	TUniquePtr<FAutoConsoleCommand> OpenMaterialSlotMapperConsoleCommand;
 };

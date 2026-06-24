@@ -1,6 +1,6 @@
 # HT Blueprint Toggle Tool
 
-适用于 Unreal Engine 5.6 的编辑器插件，用于生成角色材质切换蓝图、创建四贴图材质实例，以及导出选定的 Cooked 资产。
+适用于 Unreal Engine 5.6 的编辑器插件，用于生成角色材质切换蓝图、批量分配骨骼网格体材质槽、创建四贴图材质实例，以及导出选定的 Cooked 资产。
 
 ## 功能
 
@@ -9,6 +9,7 @@
 - 支持普通按键、符号按键，以及 `ctrl`、`shift`、`alt` 组合按键。
 - 根据 Anim Variable 自动创建动画蓝图变量、SaveGame 变量、读取与保存逻辑。
 - 在贴图切换模式中分析当前 AnimBP 预览骨骼网格体的材质槽，并按材质分组填入 Material Slot(s)。
+- 扫描角色文件夹内的材质球，按插槽名自动匹配或批量分配到骨骼网格体材质槽。
 - 根据选定材质创建四贴图材质实例。
 - 从工程资产列表中选择需要导出的 Cooked 文件，并保持原目录结构。
 - 可选择导出后启动外部打包器。
@@ -19,7 +20,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.7.zip
+   HTToggleTool-v1.5.8.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -35,13 +36,14 @@
 
 ## 蓝图切换
 
-在 `Settings` 中选择动画蓝图和 SaveGame 蓝图，选择结果会保存到当前工程配置中，关闭并重新打开工具后仍会保留。
+在 `Settings` 中选择动画蓝图、SaveGame 蓝图和角色文件夹，选择结果会保存到当前工程配置中，关闭并重新打开工具后仍会保留。角色文件夹用于扫描当前角色可用的材质球。
 
 `Function Switch` 可切换功能：
 
 - `Material visibility`：材质区域显示/隐藏。
 - `Texture switch`：材质贴图循环切换。
 - `Material Instance`：重建材质节点并创建材质实例。
+- `Slot Materials`：处理骨骼网格体材质槽的材质球分配。
 
 在 `Texture switch` 模式中点击 `Material Slot(s)` 右侧的 `Analyze`，插件会分析当前 AnimBP 的预览骨骼网格体，把使用同一个材质的 Slot 分到同一组。选择某一组后，会自动填写该组的全部 Slot ID，并同步填写 `Source Material`。分组列表会显示对应材质的材质球缩略图，不再使用贴图参数作为预览图。
 
@@ -60,6 +62,26 @@ SaveGame 命名由 `Anim Variable` 自动派生：
 ```text
 Save Variable = AnimVariable + Save
 Save Slot = AnimVariable
+```
+
+## 材质槽分配
+
+在主面板的 `Function Switch` 一行点击 `Slot Materials`。
+
+工具会读取当前 AnimBP 的预览骨骼网格体，并显示所有材质槽的 ID、插槽名和当前材质。同时会递归扫描 `Settings` 中的角色文件夹，列出其中的材质球和材质实例。
+
+可用操作：
+
+- `Match Names`：如果材质球名称与插槽名称完全一致，就自动把该材质球分配给对应插槽。
+- `Add`：添加一条批量映射，选择一个材质球，再输入一个或多个 Slot ID。
+- `Use checked slots`：把左侧勾选的 Slot ID 填入当前映射行。
+- `Apply Mappings`：把所有映射一次性写入骨骼网格体。
+
+示例：
+
+```text
+Slot IDs: 1,5,15,16,17,18,19,23
+Material: MI_player_010_female_cloth_b_Inst2
 ```
 
 ## 材质实例工具

@@ -22,16 +22,20 @@ public:
 
 	void Construct(const FArguments& InArgs);
 	void OpenMaterialAnalysisFromCommand();
+	void OpenMaterialSlotMapperFromCommand();
 
 private:
 	FReply OnGenerateClicked();
 	FReply OnOpenMaterialInstanceCreatorClicked();
+	FReply OnOpenMaterialSlotMapperClicked();
 	FReply OnOpenCookedAssetExporterClicked();
 	FReply OnOpenSettingsClicked();
 	FReply OnCloseSettingsClicked();
+	FReply OnBrowseCharacterFolderClicked();
 
 	TSharedRef<SWidget> MakeTextRow(const FText& Label, const TSharedRef<SEditableTextBox>& TextBox) const;
 	TSharedRef<SWidget> MakeBlueprintPickerRow(const FText& Label, bool bAnimBlueprint);
+	TSharedRef<SWidget> MakeCharacterFolderPickerRow();
 	TSharedRef<SWidget> MakeMaterialSlotsRow();
 	TSharedRef<SWidget> MakeMaterialPickerRow();
 	TSharedRef<SWidget> MakeTexturePickerRow(int32 TextureIndex);
@@ -49,6 +53,8 @@ private:
 	FString GetSaveGameBlueprintPath() const;
 	void OnAnimBlueprintChanged(const FAssetData& AssetData);
 	void OnSaveGameBlueprintChanged(const FAssetData& AssetData);
+	void OnCharacterFolderCommitted(const FText& Text, ETextCommit::Type CommitType);
+	void OnCharacterFolderPicked(const FString& NewPath);
 	void OnSourceMaterialChanged(const FAssetData& AssetData);
 	void OnTextureChanged(const FAssetData& AssetData, int32 TextureIndex);
 	void LoadBlueprintSettings();
@@ -56,8 +62,10 @@ private:
 	void UpdateAssetSummaryText() const;
 	FString GetShortAssetName(const FString& ObjectPath) const;
 	FString GetSourceMaterialPath() const;
+	FString GetCharacterFolderPath() const;
 	void OnToggleModeChanged(EHTBlueprintToggleMode NewMode);
 	bool BuildMaterialSlotGroups(FString& OutMeshName, FString& OutError);
+	FString InferCharacterFolderFromAnimBlueprint() const;
 
 	struct FMaterialSlotGroup
 	{
@@ -67,12 +75,15 @@ private:
 
 	FString AnimBlueprintPath;
 	FString SaveGameBlueprintPath;
+	FString CharacterFolderPath;
 	FString SourceMaterialPath;
 	TArray<FString> TexturePaths;
 	EHTBlueprintToggleMode ToggleMode = EHTBlueprintToggleMode::MaterialSection;
 	TWeakPtr<SWindow> CookedAssetExporterWindow;
 	TWeakPtr<SWindow> MaterialInstanceCreatorWindow;
+	TWeakPtr<SWindow> MaterialSlotMapperWindow;
 	TWeakPtr<SWindow> MaterialAnalysisWindow;
+	TWeakPtr<SWindow> CharacterFolderPickerWindow;
 	TWeakPtr<SWindow> SettingsWindow;
 	TArray<FMaterialSlotGroup> MaterialSlotGroups;
 	TArray<TSharedPtr<ISlateViewport>> MaterialGroupRenderedThumbnails;
@@ -80,6 +91,7 @@ private:
 	TSharedPtr<SEditableTextBox> KeyNameBox;
 	TSharedPtr<SEditableTextBox> MaterialIDsBox;
 	TSharedPtr<SEditableTextBox> MaterialSlotsBox;
+	TSharedPtr<SEditableTextBox> CharacterFolderBox;
 	TSharedPtr<SEditableTextBox> TextureParameterBox;
 	TSharedPtr<SCheckBox> MultiMaterialCheckBox;
 	TSharedPtr<SWidgetSwitcher> ModeOptionsSwitcher;

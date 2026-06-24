@@ -27,12 +27,18 @@ void FHTBlueprintToggleToolModule::StartupModule()
 		TEXT("Open the HT Blueprint Toggle Tool and run the material slot analysis."),
 		FConsoleCommandDelegate::CreateRaw(this, &FHTBlueprintToggleToolModule::OpenMaterialAnalysisWindow));
 
+	OpenMaterialSlotMapperConsoleCommand = MakeUnique<FAutoConsoleCommand>(
+		TEXT("HTBlueprintToggleTool.OpenMaterialSlotMapper"),
+		TEXT("Open the HT Blueprint Toggle Tool and the material slot mapper."),
+		FConsoleCommandDelegate::CreateRaw(this, &FHTBlueprintToggleToolModule::OpenMaterialSlotMapperWindow));
+
 	UToolMenus::RegisterStartupCallback(
 		FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FHTBlueprintToggleToolModule::RegisterMenus));
 }
 
 void FHTBlueprintToggleToolModule::ShutdownModule()
 {
+	OpenMaterialSlotMapperConsoleCommand.Reset();
 	OpenMaterialAnalysisConsoleCommand.Reset();
 	OpenWindowConsoleCommand.Reset();
 	UToolMenus::UnRegisterStartupCallback(this);
@@ -51,6 +57,15 @@ void FHTBlueprintToggleToolModule::OpenMaterialAnalysisWindow()
 	if (TSharedPtr<SHTBlueprintToggleToolPanel> Panel = ActivePanel.Pin())
 	{
 		Panel->OpenMaterialAnalysisFromCommand();
+	}
+}
+
+void FHTBlueprintToggleToolModule::OpenMaterialSlotMapperWindow()
+{
+	OpenPluginWindow();
+	if (TSharedPtr<SHTBlueprintToggleToolPanel> Panel = ActivePanel.Pin())
+	{
+		Panel->OpenMaterialSlotMapperFromCommand();
 	}
 }
 

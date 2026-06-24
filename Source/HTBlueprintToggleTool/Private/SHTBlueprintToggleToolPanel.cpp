@@ -3,13 +3,16 @@
 #include "Animation/AnimBlueprint.h"
 #include "Animation/Skeleton.h"
 #include "AssetRegistry/AssetData.h"
+#include "ContentBrowserModule.h"
 #include "Engine/Blueprint.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/Texture2D.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "HTBlueprintToggleGenerator.h"
+#include "IContentBrowserSingleton.h"
 #include "Materials/MaterialInterface.h"
+#include "Misc/PackageName.h"
 #include "Misc/ObjectThumbnail.h"
 #include "Misc/ConfigCacheIni.h"
 #include "ObjectTools.h"
@@ -18,6 +21,7 @@
 #include "RenderingThread.h"
 #include "SHTCookedAssetExporter.h"
 #include "SHTMaterialInstanceCreator.h"
+#include "SHTMaterialSlotMapper.h"
 #include "Styling/AppStyle.h"
 #include "Slate/SlateTextures.h"
 #include "Textures/SlateTextureData.h"
@@ -44,6 +48,7 @@ namespace HTTogglePanel
 	static const TCHAR* SettingsSection = TEXT("HTBlueprintToggleTool.BlueprintSettings");
 	static const TCHAR* AnimBlueprintKey = TEXT("AnimBlueprintPath");
 	static const TCHAR* SaveGameBlueprintKey = TEXT("SaveGameBlueprintPath");
+	static const TCHAR* CharacterFolderKey = TEXT("CharacterFolderPath");
 
 	static FString TextBoxString(const TSharedPtr<SEditableTextBox>& TextBox)
 	{
@@ -138,7 +143,13 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 {
 	AnimBlueprintPath = TEXT("/Game/Characters/Player/010_nanally/nanally_animbp.nanally_animbp");
 	SaveGameBlueprintPath = TEXT("/Game/Characters/Player/010_nanally/nanally_saved_bp.nanally_saved_bp");
+	CharacterFolderPath.Empty();
 	LoadBlueprintSettings();
+	if (CharacterFolderPath.IsEmpty())
+	{
+		CharacterFolderPath = InferCharacterFolderFromAnimBlueprint();
+		SaveBlueprintSettings();
+	}
 	TexturePaths.SetNum(2);
 
 	ChildSlot
@@ -289,6 +300,31 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 							.VAlign(VAlign_Center)
 							[
 								SNew(STextBlock).Text(LOCTEXT("MaterialInstanceButton", "Material Instance"))
+							]
+						]
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(8, 0, 0, 0)
+					[
+						SNew(SButton)
+						.ToolTipText(LOCTEXT("MaterialSlotMapperTooltip", "Assign materials to Skeletal Mesh material slots by exact matching or batch mappings."))
+						.OnClicked(this, &SHTBlueprintToggleToolPanel::OnOpenMaterialSlotMapperClicked)
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.VAlign(VAlign_Center)
+							.Padding(0, 0, 4, 0)
+							[
+								SNew(SImage).Image(FAppStyle::GetBrush("ClassIcon.SkeletalMesh"))
+							]
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.VAlign(VAlign_Center)
+							[
+								SNew(STextBlock).Text(LOCTEXT("MaterialSlotMapperButton", "Slot Materials"))
 							]
 						]
 					]
@@ -499,6 +535,11 @@ void SHTBlueprintToggleToolPanel::OpenMaterialAnalysisFromCommand()
 	OnAnalyzeMaterialsClicked();
 }
 
+void SHTBlueprintToggleToolPanel::OpenMaterialSlotMapperFromCommand()
+{
+	OnOpenMaterialSlotMapperClicked();
+}
+
 TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTextRow(const FText& Label, const TSharedRef<SEditableTextBox>& TextBox) const
 {
 	return SNew(SHorizontalBox)
@@ -541,6 +582,40 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeBlueprintPickerRow(const FT
 			.DisplayThumbnail(false)
 			.ObjectPath(bAnimBlueprint ? TAttribute<FString>(this, &SHTBlueprintToggleToolPanel::GetAnimBlueprintPath) : TAttribute<FString>(this, &SHTBlueprintToggleToolPanel::GetSaveGameBlueprintPath))
 			.OnObjectChanged(bAnimBlueprint ? FOnSetObject::CreateSP(this, &SHTBlueprintToggleToolPanel::OnAnimBlueprintChanged) : FOnSetObject::CreateSP(this, &SHTBlueprintToggleToolPanel::OnSaveGameBlueprintChanged))
+		];
+}
+
+TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeCharacterFolderPickerRow()
+{
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		[
+			SNew(SBox)
+			.WidthOverride(150)
+			[
+				SNew(STextBlock).Text(LOCTEXT("CharacterFolder", "Character Folder"))
+			]
+		]
+		+ SHorizontalBox::Slot()
+		.FillWidth(1.0f)
+		[
+			SAssignNew(CharacterFolderBox, SEditableTextBox)
+			.Text_Lambda([this]() { return FText::FromString(CharacterFolderPath); })
+			.HintText(LOCTEXT("CharacterFolderHint", "/Game/Characters/Player/004_lacrimosa"))
+			.OnTextCommitted(this, &SHTBlueprintToggleToolPanel::OnCharacterFolderCommitted)
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.Padding(6, 0, 0, 0)
+		[
+			SNew(SButton)
+			.ToolTipText(LOCTEXT("BrowseCharacterFolderTooltip", "Choose the character folder from the current project."))
+			.OnClicked(this, &SHTBlueprintToggleToolPanel::OnBrowseCharacterFolderClicked)
+			[
+				SNew(SImage).Image(FAppStyle::GetBrush("Icons.FolderOpen"))
+			]
 		];
 }
 
@@ -935,6 +1010,39 @@ FReply SHTBlueprintToggleToolPanel::OnOpenMaterialInstanceCreatorClicked()
 	return FReply::Handled();
 }
 
+FReply SHTBlueprintToggleToolPanel::OnOpenMaterialSlotMapperClicked()
+{
+	if (MaterialSlotMapperWindow.IsValid())
+	{
+		MaterialSlotMapperWindow.Pin()->BringToFront();
+		return FReply::Handled();
+	}
+
+	if (CharacterFolderPath.IsEmpty())
+	{
+		CharacterFolderPath = InferCharacterFolderFromAnimBlueprint();
+		SaveBlueprintSettings();
+	}
+
+	TSharedRef<SWindow> Window = SNew(SWindow)
+		.Title(LOCTEXT("MaterialSlotMapperTitle", "HT Material Slot Mapper"))
+		.ClientSize(FVector2D(860.0f, 640.0f))
+		.AutoCenter(EAutoCenter::PreferredWorkArea)
+		.SupportsMaximize(true)
+		.SupportsMinimize(false)
+		.SizingRule(ESizingRule::UserSized);
+
+	MaterialSlotMapperWindow = Window;
+	Window->SetContent(
+		SNew(SHTMaterialSlotMapper)
+		.AnimBlueprintPath(AnimBlueprintPath)
+		.CharacterFolderPath(CharacterFolderPath));
+	FSlateApplication::Get().AddWindow(Window);
+	const FSlateRect WorkArea = FSlateApplication::Get().GetPreferredWorkArea();
+	Window->MoveWindowTo(FVector2D(WorkArea.Left + 120.0f, WorkArea.Top + 90.0f));
+	return FReply::Handled();
+}
+
 FReply SHTBlueprintToggleToolPanel::OnOpenCookedAssetExporterClicked()
 {
 	if (CookedAssetExporterWindow.IsValid())
@@ -966,7 +1074,7 @@ FReply SHTBlueprintToggleToolPanel::OnOpenSettingsClicked()
 
 	TSharedRef<SWindow> Window = SNew(SWindow)
 		.Title(LOCTEXT("SettingsTitle", "HT Toggle Tool Settings"))
-		.ClientSize(FVector2D(660.0f, 220.0f))
+		.ClientSize(FVector2D(720.0f, 280.0f))
 		.SupportsMaximize(false)
 		.SupportsMinimize(false)
 		.SizingRule(ESizingRule::FixedSize);
@@ -998,9 +1106,16 @@ FReply SHTBlueprintToggleToolPanel::OnOpenSettingsClicked()
 
 			+ SVerticalBox::Slot()
 			.AutoHeight()
-			.Padding(0, 0, 0, 14)
+			.Padding(0, 0, 0, 8)
 			[
 				MakeBlueprintPickerRow(LOCTEXT("SaveBP", "SaveGame Blueprint"), false)
+			]
+
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(0, 0, 0, 14)
+			[
+				MakeCharacterFolderPickerRow()
 			]
 
 			+ SVerticalBox::Slot()
@@ -1040,6 +1155,71 @@ FReply SHTBlueprintToggleToolPanel::OnCloseSettingsClicked()
 	return FReply::Handled();
 }
 
+FReply SHTBlueprintToggleToolPanel::OnBrowseCharacterFolderClicked()
+{
+	if (CharacterFolderPickerWindow.IsValid())
+	{
+		CharacterFolderPickerWindow.Pin()->BringToFront();
+		return FReply::Handled();
+	}
+
+	FPathPickerConfig PathPickerConfig;
+	PathPickerConfig.DefaultPath = CharacterFolderPath.IsEmpty() ? InferCharacterFolderFromAnimBlueprint() : CharacterFolderPath;
+	PathPickerConfig.bAllowContextMenu = false;
+	PathPickerConfig.bShowFavorites = false;
+	PathPickerConfig.bShowViewOptions = true;
+	PathPickerConfig.OnPathSelected = FOnPathSelected::CreateSP(this, &SHTBlueprintToggleToolPanel::OnCharacterFolderPicked);
+
+	FContentBrowserModule& ContentBrowserModule = FModuleManager::LoadModuleChecked<FContentBrowserModule>(TEXT("ContentBrowser"));
+	TSharedRef<SWindow> Window = SNew(SWindow)
+		.Title(LOCTEXT("CharacterFolderPickerTitle", "Select Character Folder"))
+		.ClientSize(FVector2D(420.0f, 500.0f))
+		.SupportsMaximize(false)
+		.SupportsMinimize(false)
+		.SizingRule(ESizingRule::UserSized);
+
+	CharacterFolderPickerWindow = Window;
+	Window->SetContent(
+		SNew(SBorder)
+		.Padding(8)
+		.BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
+		[
+			ContentBrowserModule.Get().CreatePathPicker(PathPickerConfig)
+		]);
+	if (SettingsWindow.IsValid())
+	{
+		FSlateApplication::Get().AddWindowAsNativeChild(Window, SettingsWindow.Pin().ToSharedRef());
+	}
+	else
+	{
+		FSlateApplication::Get().AddWindow(Window);
+	}
+	return FReply::Handled();
+}
+
+void SHTBlueprintToggleToolPanel::OnCharacterFolderCommitted(const FText& Text, ETextCommit::Type)
+{
+	CharacterFolderPath = Text.ToString().TrimStartAndEnd();
+	SaveBlueprintSettings();
+	UpdateAssetSummaryText();
+}
+
+void SHTBlueprintToggleToolPanel::OnCharacterFolderPicked(const FString& NewPath)
+{
+	CharacterFolderPath = NewPath;
+	if (CharacterFolderBox.IsValid())
+	{
+		CharacterFolderBox->SetText(FText::FromString(CharacterFolderPath));
+	}
+	SaveBlueprintSettings();
+	UpdateAssetSummaryText();
+	if (CharacterFolderPickerWindow.IsValid())
+	{
+		CharacterFolderPickerWindow.Pin()->RequestDestroyWindow();
+		CharacterFolderPickerWindow.Reset();
+	}
+}
+
 FString SHTBlueprintToggleToolPanel::GetAnimBlueprintPath() const
 {
 	return AnimBlueprintPath;
@@ -1048,6 +1228,11 @@ FString SHTBlueprintToggleToolPanel::GetAnimBlueprintPath() const
 FString SHTBlueprintToggleToolPanel::GetSaveGameBlueprintPath() const
 {
 	return SaveGameBlueprintPath;
+}
+
+FString SHTBlueprintToggleToolPanel::GetCharacterFolderPath() const
+{
+	return CharacterFolderPath;
 }
 
 FString SHTBlueprintToggleToolPanel::GetSourceMaterialPath() const
@@ -1069,6 +1254,10 @@ void SHTBlueprintToggleToolPanel::OnAnimBlueprintChanged(const FAssetData& Asset
 	if (AssetData.IsValid())
 	{
 		AnimBlueprintPath = AssetData.GetSoftObjectPath().ToString();
+		if (CharacterFolderPath.IsEmpty())
+		{
+			CharacterFolderPath = InferCharacterFolderFromAnimBlueprint();
+		}
 		SaveBlueprintSettings();
 		UpdateAssetSummaryText();
 	}
@@ -1100,6 +1289,10 @@ void SHTBlueprintToggleToolPanel::LoadBlueprintSettings()
 	{
 		SaveGameBlueprintPath = MoveTemp(SavedPath);
 	}
+	if (GConfig->GetString(HTTogglePanel::SettingsSection, HTTogglePanel::CharacterFolderKey, SavedPath, GEditorPerProjectIni) && !SavedPath.IsEmpty())
+	{
+		CharacterFolderPath = MoveTemp(SavedPath);
+	}
 }
 
 void SHTBlueprintToggleToolPanel::SaveBlueprintSettings() const
@@ -1111,6 +1304,7 @@ void SHTBlueprintToggleToolPanel::SaveBlueprintSettings() const
 
 	GConfig->SetString(HTTogglePanel::SettingsSection, HTTogglePanel::AnimBlueprintKey, *AnimBlueprintPath, GEditorPerProjectIni);
 	GConfig->SetString(HTTogglePanel::SettingsSection, HTTogglePanel::SaveGameBlueprintKey, *SaveGameBlueprintPath, GEditorPerProjectIni);
+	GConfig->SetString(HTTogglePanel::SettingsSection, HTTogglePanel::CharacterFolderKey, *CharacterFolderPath, GEditorPerProjectIni);
 	GConfig->Flush(false, GEditorPerProjectIni);
 }
 
@@ -1135,9 +1329,10 @@ void SHTBlueprintToggleToolPanel::UpdateAssetSummaryText() const
 	if (AssetSummaryText.IsValid())
 	{
 		AssetSummaryText->SetText(FText::Format(
-			LOCTEXT("AssetSummary", "AnimBP: {0}    SaveGame: {1}"),
+			LOCTEXT("AssetSummary", "AnimBP: {0}    SaveGame: {1}    Character Folder: {2}"),
 			FText::FromString(GetShortAssetName(AnimBlueprintPath)),
-			FText::FromString(GetShortAssetName(SaveGameBlueprintPath))));
+			FText::FromString(GetShortAssetName(SaveGameBlueprintPath)),
+			FText::FromString(CharacterFolderPath)));
 	}
 }
 
@@ -1156,6 +1351,21 @@ FString SHTBlueprintToggleToolPanel::GetShortAssetName(const FString& ObjectPath
 	}
 
 	return ObjectPath;
+}
+
+FString SHTBlueprintToggleToolPanel::InferCharacterFolderFromAnimBlueprint() const
+{
+	FString PackageName = AnimBlueprintPath;
+	const int32 DotIndex = PackageName.Find(TEXT("."));
+	if (DotIndex != INDEX_NONE)
+	{
+		PackageName.LeftInline(DotIndex);
+	}
+	if (FPackageName::IsValidLongPackageName(PackageName))
+	{
+		return FPackageName::GetLongPackagePath(PackageName);
+	}
+	return TEXT("/Game/Characters/Player");
 }
 
 bool SHTBlueprintToggleToolPanel::ParseMaterialIDs(TArray<int32>& OutMaterialIDs, FString& OutError) const
