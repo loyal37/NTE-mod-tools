@@ -32,6 +32,7 @@ private:
 	FReply OnOpenSettingsClicked();
 	FReply OnCloseSettingsClicked();
 	FReply OnBrowseCharacterFolderClicked();
+	FReply OnCreateCharacterBlueprintsClicked();
 
 	TSharedRef<SWidget> MakeTextRow(const FText& Label, const TSharedRef<SEditableTextBox>& TextBox) const;
 	TSharedRef<SWidget> MakeBlueprintPickerRow(const FText& Label, bool bAnimBlueprint);
@@ -60,6 +61,7 @@ private:
 	void LoadBlueprintSettings();
 	void SaveBlueprintSettings() const;
 	void UpdateAssetSummaryText() const;
+	bool CreateCharacterBlueprintAssets(FString& OutMessage);
 	FString GetShortAssetName(const FString& ObjectPath) const;
 	FString GetSourceMaterialPath() const;
 	FString GetCharacterFolderPath() const;

@@ -1,16 +1,31 @@
 #include "SHTBlueprintToggleToolPanel.h"
 
+#include "Animation/AnimInstance.h"
 #include "Animation/AnimBlueprint.h"
+#include "AnimationGraphSchema.h"
+#include "AnimGraphNode_LinkedInputPose.h"
+#include "AnimGraphNode_Root.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Animation/Skeleton.h"
 #include "AssetRegistry/AssetData.h"
+#include "AssetToolsModule.h"
 #include "ContentBrowserModule.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphPin.h"
 #include "Engine/Blueprint.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/Texture2D.h"
+#include "Factories/AnimBlueprintFactory.h"
+#include "Factories/BlueprintFactory.h"
+#include "FileHelpers.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Notifications/NotificationManager.h"
+#include "GameFramework/SaveGame.h"
 #include "HTBlueprintToggleGenerator.h"
 #include "IContentBrowserSingleton.h"
+#include "IAssetTools.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/PackageName.h"
 #include "Misc/ObjectThumbnail.h"
@@ -19,6 +34,7 @@
 #include "PropertyCustomizationHelpers.h"
 #include "Rendering/RenderingCommon.h"
 #include "RenderingThread.h"
+#include "ScopedTransaction.h"
 #include "SHTCookedAssetExporter.h"
 #include "SHTMaterialInstanceCreator.h"
 #include "SHTMaterialSlotMapper.h"
@@ -40,6 +56,7 @@
 #include "Widgets/SViewport.h"
 #include "Widgets/SWindow.h"
 #include "Widgets/Text/STextBlock.h"
+#include "UObject/Package.h"
 
 #define LOCTEXT_NAMESPACE "SHTBlueprintToggleToolPanel"
 
@@ -69,6 +86,223 @@ namespace HTTogglePanel
 			Values.Add(FString::FromInt(SlotIndex));
 		}
 		return FString::Join(Values, *Separator);
+	}
+
+	static FString NormalizeObjectPath(FString Path)
+	{
+		Path.TrimStartAndEndInline();
+		Path.ReplaceInline(TEXT("\\"), TEXT("/"));
+		if (!Path.IsEmpty() && !Path.Contains(TEXT(".")))
+		{
+			Path += TEXT(".") + FPackageName::GetLongPackageAssetName(Path);
+		}
+		return Path;
+	}
+
+	static FString MakeObjectPath(const FString& PackagePath, const FString& AssetName)
+	{
+		return PackagePath / AssetName + TEXT(".") + AssetName;
+	}
+
+	static bool IsDigitsOnly(const FString& Value)
+	{
+		if (Value.IsEmpty())
+		{
+			return false;
+		}
+
+		for (const TCHAR Character : Value)
+		{
+			if (!FChar::IsDigit(Character))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	static FString MakeCharacterAssetBaseName(const FString& CharacterFolder)
+	{
+		FString FolderName = FPackageName::GetLongPackageAssetName(CharacterFolder);
+		int32 UnderscoreIndex = INDEX_NONE;
+		if (FolderName.FindChar(TEXT('_'), UnderscoreIndex))
+		{
+			const FString Prefix = FolderName.Left(UnderscoreIndex);
+			if (IsDigitsOnly(Prefix) && UnderscoreIndex + 1 < FolderName.Len())
+			{
+				FolderName = FolderName.Mid(UnderscoreIndex + 1);
+			}
+		}
+
+		return ObjectTools::SanitizeObjectName(FolderName);
+	}
+
+	template <typename ObjectType>
+	static ObjectType* LoadAsset(const FString& RawPath)
+	{
+		return LoadObject<ObjectType>(nullptr, *NormalizeObjectPath(RawPath));
+	}
+
+	static void ShowNotification(const FText& Text, SNotificationItem::ECompletionState CompletionState, float ExpireDuration = 5.0f)
+	{
+		FNotificationInfo Info(Text);
+		Info.ExpireDuration = ExpireDuration;
+		TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info);
+		if (Notification.IsValid())
+		{
+			Notification->SetCompletionState(CompletionState);
+		}
+	}
+
+	static USkeletalMesh* FindSkeletalMeshInCharacterFolder(const FString& CharacterFolder, FString& OutError)
+	{
+		if (!FPackageName::IsValidLongPackageName(CharacterFolder))
+		{
+			OutError = TEXT("Character Folder must be a valid /Game path.");
+			return nullptr;
+		}
+
+		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+		TArray<FAssetData> Assets;
+		AssetRegistryModule.Get().GetAssetsByPath(FName(*CharacterFolder), Assets, true);
+
+		USkeletalMesh* FirstMesh = nullptr;
+		for (const FAssetData& AssetData : Assets)
+		{
+			USkeletalMesh* Mesh = Cast<USkeletalMesh>(AssetData.GetAsset());
+			if (!Mesh)
+			{
+				continue;
+			}
+
+			if (!FirstMesh)
+			{
+				FirstMesh = Mesh;
+			}
+
+			if (AssetData.AssetName.ToString().Contains(TEXT("_skin")))
+			{
+				return Mesh;
+			}
+		}
+
+		if (!FirstMesh)
+		{
+			OutError = FString::Printf(TEXT("No Skeletal Mesh was found under %s."), *CharacterFolder);
+		}
+		return FirstMesh;
+	}
+
+	static UEdGraph* FindBlueprintGraph(UBlueprint* Blueprint, const FName GraphName)
+	{
+		if (!Blueprint)
+		{
+			return nullptr;
+		}
+
+		auto FindInGraphs = [GraphName](const TArray<TObjectPtr<UEdGraph>>& Graphs) -> UEdGraph*
+		{
+			for (UEdGraph* Graph : Graphs)
+			{
+				if (Graph && Graph->GetFName() == GraphName)
+				{
+					return Graph;
+				}
+			}
+			return nullptr;
+		};
+
+		if (UEdGraph* Graph = FindInGraphs(Blueprint->FunctionGraphs))
+		{
+			return Graph;
+		}
+		if (UEdGraph* Graph = FindInGraphs(Blueprint->UbergraphPages))
+		{
+			return Graph;
+		}
+		if (UEdGraph* Graph = FindInGraphs(Blueprint->MacroGraphs))
+		{
+			return Graph;
+		}
+		if (UEdGraph* Graph = FindInGraphs(Blueprint->DelegateSignatureGraphs))
+		{
+			return Graph;
+		}
+		return nullptr;
+	}
+
+	static UEdGraphPin* FindPosePin(UEdGraphNode* Node, EEdGraphPinDirection Direction)
+	{
+		if (!Node)
+		{
+			return nullptr;
+		}
+
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (Pin && !Pin->bOrphanedPin && Pin->Direction == Direction && UAnimationGraphSchema::IsPosePin(Pin->PinType))
+			{
+				return Pin;
+			}
+		}
+		return nullptr;
+	}
+
+	static bool EnsureInputPoseGraph(UAnimBlueprint* AnimBlueprint, FString& OutError)
+	{
+		UEdGraph* AnimGraph = FindBlueprintGraph(AnimBlueprint, TEXT("AnimGraph"));
+		if (!AnimGraph)
+		{
+			OutError = TEXT("The created Anim Blueprint does not contain an AnimGraph.");
+			return false;
+		}
+
+		TArray<UAnimGraphNode_Root*> RootNodes;
+		AnimGraph->GetNodesOfClass(RootNodes);
+
+		UAnimGraphNode_Root* RootNode = RootNodes.Num() > 0 ? RootNodes[0] : nullptr;
+		if (!RootNode)
+		{
+			FGraphNodeCreator<UAnimGraphNode_Root> RootCreator(*AnimGraph);
+			RootNode = RootCreator.CreateNode();
+			RootNode->NodePosX = 300;
+			RootNode->NodePosY = 0;
+			RootCreator.Finalize();
+		}
+
+		TArray<UAnimGraphNode_LinkedInputPose*> InputPoseNodes;
+		AnimGraph->GetNodesOfClass(InputPoseNodes);
+
+		UAnimGraphNode_LinkedInputPose* InputPoseNode = InputPoseNodes.Num() > 0 ? InputPoseNodes[0] : nullptr;
+		if (!InputPoseNode)
+		{
+			FGraphNodeCreator<UAnimGraphNode_LinkedInputPose> InputCreator(*AnimGraph);
+			InputPoseNode = InputCreator.CreateNode();
+			InputPoseNode->NodePosX = RootNode->NodePosX - 360;
+			InputPoseNode->NodePosY = RootNode->NodePosY;
+			InputCreator.Finalize();
+			InputPoseNode->ReconstructNode();
+		}
+
+		UEdGraphPin* InputPosePin = FindPosePin(InputPoseNode, EGPD_Output);
+		UEdGraphPin* RootPosePin = FindPosePin(RootNode, EGPD_Input);
+		if (!InputPosePin || !RootPosePin)
+		{
+			OutError = TEXT("Could not find the Input Pose or Output Pose pin in AnimGraph.");
+			return false;
+		}
+
+		RootPosePin->BreakAllPinLinks();
+		const UEdGraphSchema* Schema = AnimGraph->GetSchema();
+		if (!Schema || (!Schema->TryCreateConnection(InputPosePin, RootPosePin) && !Schema->TryCreateConnection(RootPosePin, InputPosePin)))
+		{
+			OutError = TEXT("Could not connect Input Pose to Output Pose.");
+			return false;
+		}
+
+		AnimGraph->NotifyGraphChanged();
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(AnimBlueprint);
+		return true;
 	}
 
 	class FRenderedMaterialThumbnailViewport final : public ISlateViewport
@@ -1079,7 +1313,7 @@ FReply SHTBlueprintToggleToolPanel::OnOpenSettingsClicked()
 
 	TSharedRef<SWindow> Window = SNew(SWindow)
 		.Title(LOCTEXT("SettingsTitle", "HT Toggle Tool Settings"))
-		.ClientSize(FVector2D(720.0f, 280.0f))
+		.ClientSize(FVector2D(760.0f, 340.0f))
 		.SupportsMaximize(false)
 		.SupportsMinimize(false)
 		.SizingRule(ESizingRule::FixedSize);
@@ -1118,9 +1352,36 @@ FReply SHTBlueprintToggleToolPanel::OnOpenSettingsClicked()
 
 			+ SVerticalBox::Slot()
 			.AutoHeight()
-			.Padding(0, 0, 0, 14)
+			.Padding(0, 0, 0, 10)
 			[
 				MakeCharacterFolderPickerRow()
+			]
+
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(0, 0, 0, 14)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				[
+					SNew(SBox)
+					.WidthOverride(150)
+					[
+						SNew(STextBlock)
+						.Text(LOCTEXT("CreateBlueprintsLabel", "Create Blueprints"))
+					]
+				]
+				+ SHorizontalBox::Slot()
+				.FillWidth(1.0f)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("CreateCharacterBlueprints", "Create AnimBP + SaveGame and bind Skeletal Mesh"))
+					.HAlign(HAlign_Center)
+					.ToolTipText(LOCTEXT("CreateCharacterBlueprintsTooltip", "Creates character AnimBP and SaveGame Blueprint in Character Folder, connects Input Pose to Output Pose, assigns the AnimBP as the Skeletal Mesh post-process Anim Blueprint, and fills the paths above."))
+					.OnClicked(this, &SHTBlueprintToggleToolPanel::OnCreateCharacterBlueprintsClicked)
+				]
 			]
 
 			+ SVerticalBox::Slot()
@@ -1223,6 +1484,174 @@ void SHTBlueprintToggleToolPanel::OnCharacterFolderPicked(const FString& NewPath
 		CharacterFolderPickerWindow.Pin()->RequestDestroyWindow();
 		CharacterFolderPickerWindow.Reset();
 	}
+}
+
+FReply SHTBlueprintToggleToolPanel::OnCreateCharacterBlueprintsClicked()
+{
+	FString Message;
+	if (!CreateCharacterBlueprintAssets(Message))
+	{
+		ShowPanelError(FText::FromString(Message));
+		return FReply::Handled();
+	}
+
+	if (CharacterFolderBox.IsValid())
+	{
+		CharacterFolderBox->SetText(FText::FromString(CharacterFolderPath));
+	}
+
+	UpdateAssetSummaryText();
+	HTTogglePanel::ShowNotification(FText::FromString(Message), SNotificationItem::CS_Success);
+	return FReply::Handled();
+}
+
+bool SHTBlueprintToggleToolPanel::CreateCharacterBlueprintAssets(FString& OutMessage)
+{
+	using namespace HTTogglePanel;
+
+	if (CharacterFolderPath.IsEmpty())
+	{
+		CharacterFolderPath = InferCharacterFolderFromAnimBlueprint();
+	}
+	CharacterFolderPath.TrimStartAndEndInline();
+	CharacterFolderPath.ReplaceInline(TEXT("\\"), TEXT("/"));
+
+	if (!FPackageName::IsValidLongPackageName(CharacterFolderPath))
+	{
+		OutMessage = TEXT("Please choose a valid Character Folder under /Game.");
+		return false;
+	}
+
+	FString MeshError;
+	USkeletalMesh* SkeletalMesh = FindSkeletalMeshInCharacterFolder(CharacterFolderPath, MeshError);
+	if (!SkeletalMesh)
+	{
+		OutMessage = MeshError;
+		return false;
+	}
+
+	USkeleton* Skeleton = SkeletalMesh->GetSkeleton();
+	if (!Skeleton)
+	{
+		OutMessage = FString::Printf(TEXT("Skeletal Mesh %s does not have a Skeleton."), *SkeletalMesh->GetName());
+		return false;
+	}
+
+	const FString BaseName = MakeCharacterAssetBaseName(CharacterFolderPath);
+	if (BaseName.IsEmpty())
+	{
+		OutMessage = TEXT("Could not derive a character name from Character Folder.");
+		return false;
+	}
+
+	const FString AnimAssetName = BaseName + TEXT("_animbp");
+	const FString SaveAssetName = BaseName + TEXT("_save");
+	const FString AnimObjectPath = MakeObjectPath(CharacterFolderPath, AnimAssetName);
+	const FString SaveObjectPath = MakeObjectPath(CharacterFolderPath, SaveAssetName);
+
+	FScopedTransaction Transaction(LOCTEXT("CreateCharacterBlueprintAssetsTransaction", "Create character Blueprints"));
+	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
+
+	UAnimBlueprint* AnimBlueprint = LoadAsset<UAnimBlueprint>(AnimObjectPath);
+	if (!AnimBlueprint)
+	{
+		if (UObject* ExistingObject = LoadAsset<UObject>(AnimObjectPath))
+		{
+			OutMessage = FString::Printf(TEXT("Asset %s already exists but is not an Anim Blueprint."), *AnimObjectPath);
+			return false;
+		}
+
+		UAnimBlueprintFactory* AnimFactory = NewObject<UAnimBlueprintFactory>();
+		AnimFactory->BlueprintType = BPTYPE_Normal;
+		AnimFactory->ParentClass = UAnimInstance::StaticClass();
+		AnimFactory->TargetSkeleton = Skeleton;
+		AnimFactory->PreviewSkeletalMesh = SkeletalMesh;
+		AnimFactory->bTemplate = false;
+
+		AnimBlueprint = Cast<UAnimBlueprint>(AssetToolsModule.Get().CreateAsset(AnimAssetName, CharacterFolderPath, UAnimBlueprint::StaticClass(), AnimFactory));
+		if (!AnimBlueprint)
+		{
+			OutMessage = FString::Printf(TEXT("Failed to create Anim Blueprint: %s."), *AnimObjectPath);
+			return false;
+		}
+	}
+
+	UBlueprint* SaveBlueprint = LoadAsset<UBlueprint>(SaveObjectPath);
+	if (!SaveBlueprint)
+	{
+		if (UObject* ExistingObject = LoadAsset<UObject>(SaveObjectPath))
+		{
+			OutMessage = FString::Printf(TEXT("Asset %s already exists but is not a Blueprint."), *SaveObjectPath);
+			return false;
+		}
+
+		UBlueprintFactory* SaveFactory = NewObject<UBlueprintFactory>();
+		SaveFactory->ParentClass = USaveGame::StaticClass();
+		SaveFactory->BlueprintType = BPTYPE_Normal;
+		SaveFactory->bSkipClassPicker = true;
+
+		SaveBlueprint = Cast<UBlueprint>(AssetToolsModule.Get().CreateAsset(SaveAssetName, CharacterFolderPath, UBlueprint::StaticClass(), SaveFactory));
+		if (!SaveBlueprint)
+		{
+			OutMessage = FString::Printf(TEXT("Failed to create SaveGame Blueprint: %s."), *SaveObjectPath);
+			return false;
+		}
+	}
+
+	AnimBlueprint->Modify();
+	AnimBlueprint->TargetSkeleton = Skeleton;
+	AnimBlueprint->SetPreviewMesh(SkeletalMesh, true);
+
+	FString GraphError;
+	if (!EnsureInputPoseGraph(AnimBlueprint, GraphError))
+	{
+		OutMessage = GraphError;
+		return false;
+	}
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(SaveBlueprint);
+	FKismetEditorUtilities::CompileBlueprint(SaveBlueprint);
+	FKismetEditorUtilities::CompileBlueprint(AnimBlueprint);
+	if (SaveBlueprint->Status == BS_Error)
+	{
+		OutMessage = TEXT("The created SaveGame Blueprint has compile errors.");
+		return false;
+	}
+	if (AnimBlueprint->Status == BS_Error)
+	{
+		OutMessage = TEXT("The created Anim Blueprint has compile errors.");
+		return false;
+	}
+	if (!AnimBlueprint->GeneratedClass || !AnimBlueprint->GeneratedClass->IsChildOf(UAnimInstance::StaticClass()))
+	{
+		OutMessage = TEXT("The created Anim Blueprint does not have a valid generated AnimInstance class.");
+		return false;
+	}
+
+	SkeletalMesh->Modify();
+	SkeletalMesh->SetPostProcessAnimBlueprint(AnimBlueprint->GeneratedClass.Get());
+	SkeletalMesh->MarkPackageDirty();
+
+	AnimBlueprintPath = AnimBlueprint->GetPathName();
+	SaveGameBlueprintPath = SaveBlueprint->GetPathName();
+	SaveBlueprintSettings();
+
+	TArray<UPackage*> PackagesToSave;
+	PackagesToSave.AddUnique(AnimBlueprint->GetOutermost());
+	PackagesToSave.AddUnique(SaveBlueprint->GetOutermost());
+	PackagesToSave.AddUnique(SkeletalMesh->GetOutermost());
+	if (!UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, true))
+	{
+		OutMessage = TEXT("Blueprints were created, but one or more assets could not be saved.");
+		return false;
+	}
+
+	OutMessage = FString::Printf(
+		TEXT("Created/updated %s and %s, then assigned %s as the Skeletal Mesh post-process Anim Blueprint."),
+		*AnimAssetName,
+		*SaveAssetName,
+		*AnimAssetName);
+	return true;
 }
 
 FString SHTBlueprintToggleToolPanel::GetAnimBlueprintPath() const

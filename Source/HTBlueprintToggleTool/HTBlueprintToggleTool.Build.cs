@@ -11,6 +11,7 @@ public class HTBlueprintToggleTool : ModuleRules
 			{
 				"AssetTools",
 				"AssetRegistry",
+				"AnimGraph",
 				"BlueprintGraph",
 				"ContentBrowser",
 				"Core",

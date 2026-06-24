@@ -7,6 +7,7 @@
 - 生成单个或多个材质区域的显示/隐藏蓝图。
 - 生成单材质槽或多材质槽的多贴图循环切换蓝图。
 - 支持普通按键、符号按键，以及 `ctrl`、`shift`、`alt` 组合按键。
+- 在角色文件夹中创建对应角色的 AnimBP 和 SaveGame 蓝图，并自动绑定到骨骼网格体的后期处理动画蓝图。
 - 根据 Anim Variable 自动创建动画蓝图变量、SaveGame 变量、读取与保存逻辑。
 - 在贴图切换模式中分析当前 AnimBP 预览骨骼网格体的材质槽，并按材质分组填入 Material Slot(s)。
 - 扫描角色文件夹内的材质球，按插槽名自动匹配或批量分配到骨骼网格体材质槽。
@@ -20,7 +21,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.10.zip
+   HTToggleTool-v1.5.11.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -37,6 +38,7 @@
 ## 蓝图切换
 
 在 `Settings` 中选择动画蓝图、SaveGame 蓝图和角色文件夹，选择结果会保存到当前工程配置中，关闭并重新打开工具后仍会保留。角色文件夹用于扫描当前角色可用的材质球。
+点击 `Create AnimBP + SaveGame and bind Skeletal Mesh` 后，插件会按角色文件夹名称创建对应的动画蓝图和 SaveGame 蓝图，自动把 AnimGraph 中的 `Input Pose` 连接到 `Output Pose`，并把该动画蓝图写入角色骨骼网格体的后期处理动画蓝图设置中。
 
 `Function Switch` 可切换功能：
 
