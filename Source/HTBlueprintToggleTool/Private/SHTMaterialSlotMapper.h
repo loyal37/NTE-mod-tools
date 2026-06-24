@@ -4,9 +4,11 @@
 #include "Widgets/SCompoundWidget.h"
 
 class SCheckBox;
+class SBox;
 class SEditableTextBox;
 class STextBlock;
 class SVerticalBox;
+class ISlateViewport;
 class UMaterialInterface;
 class USkeletalMesh;
 
@@ -39,6 +41,7 @@ private:
 	struct FMappingRow
 	{
 		FString MaterialPath;
+		TSharedPtr<SBox> MaterialPreviewBox;
 		TSharedPtr<SEditableTextBox> SlotIdsBox;
 	};
 
@@ -50,7 +53,9 @@ private:
 	TSharedRef<SWidget> MakeSlotRow(int32 SlotIndex);
 	TSharedRef<SWidget> MakeMappingRow(TSharedPtr<FMappingRow> Mapping);
 	TSharedRef<SWidget> MakeMaterialCombo(TSharedPtr<FMappingRow> Mapping);
-	TSharedRef<SWidget> MakeMaterialComboItem(TSharedPtr<FMaterialOption> Option) const;
+	TSharedRef<SWidget> MakeMaterialComboItem(TSharedPtr<FMaterialOption> Option);
+	TSharedRef<SWidget> MakeMaterialPreview(UMaterialInterface* Material, uint32 Size);
+	void RefreshMappingMaterialPreview(TSharedPtr<FMappingRow> Mapping);
 
 	FReply OnAutoMatchClicked();
 	FReply OnAddMappingClicked();
@@ -71,6 +76,7 @@ private:
 	TArray<FSlotEntry> Slots;
 	TArray<TSharedPtr<FMaterialOption>> MaterialOptions;
 	TArray<TSharedPtr<FMappingRow>> MappingRows;
+	TArray<TSharedPtr<ISlateViewport>> MaterialPreviewViewports;
 
 	TSharedPtr<SVerticalBox> SlotListBox;
 	TSharedPtr<SVerticalBox> MappingRowsBox;

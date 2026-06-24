@@ -20,7 +20,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.8.zip
+   HTToggleTool-v1.5.9.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -69,6 +69,7 @@ Save Slot = AnimVariable
 在主面板的 `Function Switch` 一行点击 `Slot Materials`。
 
 工具会读取当前 AnimBP 的预览骨骼网格体，并显示所有材质槽的 ID、插槽名和当前材质。同时会递归扫描 `Settings` 中的角色文件夹，列出其中的材质球和材质实例。
+材质槽名称会以较大的粗体显示；选择材质球时，下拉列表和当前选择区域都会显示材质球预览图，方便区分相近名称的材质。
 
 可用操作：
 

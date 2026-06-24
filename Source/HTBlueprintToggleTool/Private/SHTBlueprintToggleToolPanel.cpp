@@ -1026,7 +1026,7 @@ FReply SHTBlueprintToggleToolPanel::OnOpenMaterialSlotMapperClicked()
 
 	TSharedRef<SWindow> Window = SNew(SWindow)
 		.Title(LOCTEXT("MaterialSlotMapperTitle", "HT Material Slot Mapper"))
-		.ClientSize(FVector2D(860.0f, 640.0f))
+		.ClientSize(FVector2D(1180.0f, 720.0f))
 		.AutoCenter(EAutoCenter::PreferredWorkArea)
 		.SupportsMaximize(true)
 		.SupportsMinimize(false)
@@ -1039,7 +1039,12 @@ FReply SHTBlueprintToggleToolPanel::OnOpenMaterialSlotMapperClicked()
 		.CharacterFolderPath(CharacterFolderPath));
 	FSlateApplication::Get().AddWindow(Window);
 	const FSlateRect WorkArea = FSlateApplication::Get().GetPreferredWorkArea();
-	Window->MoveWindowTo(FVector2D(WorkArea.Left + 120.0f, WorkArea.Top + 90.0f));
+	const FVector2D DesiredWindowSize(1180.0f, 720.0f);
+	const float WorkAreaWidth = WorkArea.Right - WorkArea.Left;
+	const float WorkAreaHeight = WorkArea.Bottom - WorkArea.Top;
+	const float WindowX = WorkArea.Left + FMath::Max(0.0f, (WorkAreaWidth - DesiredWindowSize.X) * 0.5f);
+	const float WindowY = WorkArea.Top + FMath::Max(0.0f, (WorkAreaHeight - DesiredWindowSize.Y) * 0.5f);
+	Window->MoveWindowTo(FVector2D(WindowX, WindowY));
 	return FReply::Handled();
 }
 

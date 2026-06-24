@@ -8,8 +8,15 @@
 #include "FileHelpers.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "Materials/MaterialInterface.h"
+#include "Misc/ObjectThumbnail.h"
 #include "Misc/PackageName.h"
+#include "ObjectTools.h"
+#include "Rendering/RenderingCommon.h"
+#include "RenderingThread.h"
+#include "Slate/SlateTextures.h"
 #include "Styling/AppStyle.h"
+#include "Styling/CoreStyle.h"
+#include "Textures/SlateTextureData.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SComboBox.h"
@@ -20,6 +27,7 @@
 #include "Widgets/Layout/SSeparator.h"
 #include "Widgets/Layout/SSplitter.h"
 #include "Widgets/Notifications/SNotificationList.h"
+#include "Widgets/SViewport.h"
 #include "Widgets/Text/STextBlock.h"
 
 #define LOCTEXT_NAMESPACE "SHTMaterialSlotMapper"
@@ -40,6 +48,73 @@ namespace HTMaterialSlotMapper
 		}
 		return Path;
 	}
+
+	class FRenderedMaterialThumbnailViewport final : public ISlateViewport
+	{
+	public:
+		FRenderedMaterialThumbnailViewport(UObject* MaterialAsset, const uint32 InSize)
+			: Size(static_cast<int32>(InSize), static_cast<int32>(InSize))
+		{
+			if (!MaterialAsset)
+			{
+				return;
+			}
+
+			FObjectThumbnail ObjectThumbnail;
+			ThumbnailTools::RenderThumbnail(
+				MaterialAsset,
+				InSize,
+				InSize,
+				ThumbnailTools::EThumbnailTextureFlushMode::NeverFlush,
+				nullptr,
+				&ObjectThumbnail);
+
+			const FImageView Image = ObjectThumbnail.GetImage();
+			if (!Image.RawData || Image.SizeX <= 0 || Image.SizeY <= 0)
+			{
+				return;
+			}
+
+			TSharedPtr<FSlateTextureData, ESPMode::ThreadSafe> TextureData = MakeShared<FSlateTextureData, ESPMode::ThreadSafe>(Image);
+			Texture = MakeUnique<FSlateTexture2DRHIRef>(
+				TextureData->GetWidth(),
+				TextureData->GetHeight(),
+				PF_B8G8R8A8,
+				TextureData,
+				TexCreate_SRGB);
+			BeginInitResource(Texture.Get());
+			FlushRenderingCommands();
+		}
+
+		virtual ~FRenderedMaterialThumbnailViewport() override
+		{
+			if (Texture)
+			{
+				BeginReleaseResource(Texture.Get());
+				FlushRenderingCommands();
+				Texture.Reset();
+			}
+		}
+
+		virtual FIntPoint GetSize() const override
+		{
+			return Size;
+		}
+
+		virtual FSlateShaderResource* GetViewportRenderTargetTexture() const override
+		{
+			return Texture && Texture->IsValid() ? Texture.Get() : nullptr;
+		}
+
+		virtual bool RequiresVsync() const override
+		{
+			return false;
+		}
+
+	private:
+		FIntPoint Size;
+		TUniquePtr<FSlateTexture2DRHIRef> Texture;
+	};
 }
 
 void SHTMaterialSlotMapper::Construct(const FArguments& InArgs)
@@ -93,10 +168,14 @@ void SHTMaterialSlotMapper::Construct(const FArguments& InArgs)
 			+ SVerticalBox::Slot()
 			.FillHeight(1.0f)
 			[
-				SNew(SSplitter)
-				+ SSplitter::Slot()
-				.Value(0.55f)
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.Padding(0, 0, 10, 0)
 				[
+					SNew(SBox)
+					.WidthOverride(720.0f)
+					[
 					SNew(SBorder)
 					.Padding(10)
 					.BorderImage(FAppStyle::GetBrush("Brushes.Recessed"))
@@ -120,9 +199,10 @@ void SHTMaterialSlotMapper::Construct(const FArguments& InArgs)
 							]
 						]
 					]
+					]
 				]
-				+ SSplitter::Slot()
-				.Value(0.45f)
+				+ SHorizontalBox::Slot()
+				.FillWidth(1.0f)
 				[
 					SNew(SBorder)
 					.Padding(10)
@@ -331,6 +411,7 @@ void SHTMaterialSlotMapper::RebuildMappingRows()
 		return;
 	}
 
+	MaterialPreviewViewports.Reset();
 	MappingRowsBox->ClearChildren();
 	for (const TSharedPtr<FMappingRow>& Mapping : MappingRows)
 	{
@@ -348,7 +429,7 @@ TSharedRef<SWidget> SHTMaterialSlotMapper::MakeSlotRow(const int32 SlotIndex)
 	FSlotEntry& Entry = Slots[SlotIndex];
 	const FString MaterialName = Entry.Material.IsValid() ? Entry.Material->GetName() : FString(TEXT("None"));
 	return SNew(SBorder)
-		.Padding(FMargin(6, 4))
+		.Padding(FMargin(8, 7))
 		.BorderImage(FAppStyle::GetBrush("Brushes.Panel"))
 		[
 			SNew(SHorizontalBox)
@@ -380,7 +461,9 @@ TSharedRef<SWidget> SHTMaterialSlotMapper::MakeSlotRow(const int32 SlotIndex)
 				[
 					SNew(STextBlock)
 					.Text(FText::Format(LOCTEXT("SlotLabel", "Slot {0}: {1}"), FText::AsNumber(Entry.Index), FText::FromString(GetSlotName(Entry))))
-					.Font(FAppStyle::GetFontStyle("DetailsView.CategoryFontStyle"))
+					.Font(FCoreStyle::GetDefaultFontStyle("Bold", 14))
+					.MinDesiredWidth(0.0f)
+					.Clipping(EWidgetClipping::ClipToBounds)
 				]
 				+ SVerticalBox::Slot()
 				.AutoHeight()
@@ -388,7 +471,10 @@ TSharedRef<SWidget> SHTMaterialSlotMapper::MakeSlotRow(const int32 SlotIndex)
 				[
 					SNew(STextBlock)
 					.Text(FText::Format(LOCTEXT("CurrentMaterial", "Current: {0}"), FText::FromString(MaterialName)))
+					.Font(FCoreStyle::GetDefaultFontStyle("Regular", 13))
 					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+					.MinDesiredWidth(0.0f)
+					.Clipping(EWidgetClipping::ClipToBounds)
 				]
 			]
 		];
@@ -466,46 +552,112 @@ TSharedRef<SWidget> SHTMaterialSlotMapper::MakeMaterialCombo(TSharedPtr<FMapping
 		Mapping->MaterialPath = MaterialOptions[0]->ObjectPath;
 	}
 
+	TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox);
+	Row->AddSlot()
+	.AutoWidth()
+	.VAlign(VAlign_Center)
+	.Padding(0, 0, 8, 0)
+	[
+		SNew(SBox)
+		.WidthOverride(70)
+		[
+			SNew(STextBlock).Text(LOCTEXT("Material", "Material"))
+		]
+	];
+	Row->AddSlot()
+	.AutoWidth()
+	.VAlign(VAlign_Center)
+	.Padding(0, 0, 8, 0)
+	[
+		SAssignNew(Mapping->MaterialPreviewBox, SBox)
+		.WidthOverride(42)
+		.HeightOverride(42)
+	];
+	Row->AddSlot()
+	.FillWidth(1.0f)
+	.VAlign(VAlign_Center)
+	[
+		SNew(SComboBox<TSharedPtr<FMaterialOption>>)
+		.OptionsSource(&MaterialOptions)
+		.OnGenerateWidget(this, &SHTMaterialSlotMapper::MakeMaterialComboItem)
+		.OnSelectionChanged_Lambda([this, Mapping](TSharedPtr<FMaterialOption> Selected, ESelectInfo::Type)
+		{
+			if (Selected.IsValid())
+			{
+				Mapping->MaterialPath = Selected->ObjectPath;
+				RefreshMappingMaterialPreview(Mapping);
+			}
+		})
+		[
+			SNew(STextBlock)
+			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 13))
+			.Text_Lambda([this, Mapping]()
+			{
+				const TSharedPtr<FMaterialOption> Option = FindMaterialOptionByPath(Mapping->MaterialPath);
+				return FText::FromString(Option.IsValid() ? Option->DisplayName : FString(TEXT("Choose material")));
+			})
+		]
+	];
+	RefreshMappingMaterialPreview(Mapping);
+	return Row;
+}
+
+TSharedRef<SWidget> SHTMaterialSlotMapper::MakeMaterialComboItem(TSharedPtr<FMaterialOption> Option)
+{
+	UMaterialInterface* Material = Option.IsValid() ? Option->Material.Get() : nullptr;
 	return SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
 		.VAlign(VAlign_Center)
-		.Padding(0, 0, 8, 0)
+		.Padding(0, 2, 8, 2)
 		[
-			SNew(SBox)
-			.WidthOverride(70)
-			[
-				SNew(STextBlock).Text(LOCTEXT("Material", "Material"))
-			]
+			MakeMaterialPreview(Material, 42)
 		]
 		+ SHorizontalBox::Slot()
 		.FillWidth(1.0f)
+		.VAlign(VAlign_Center)
 		[
-			SNew(SComboBox<TSharedPtr<FMaterialOption>>)
-			.OptionsSource(&MaterialOptions)
-			.OnGenerateWidget(this, &SHTMaterialSlotMapper::MakeMaterialComboItem)
-			.OnSelectionChanged_Lambda([Mapping](TSharedPtr<FMaterialOption> Selected, ESelectInfo::Type)
-			{
-				if (Selected.IsValid())
-				{
-					Mapping->MaterialPath = Selected->ObjectPath;
-				}
-			})
-			[
-				SNew(STextBlock)
-				.Text_Lambda([this, Mapping]()
-				{
-					const TSharedPtr<FMaterialOption> Option = FindMaterialOptionByPath(Mapping->MaterialPath);
-					return FText::FromString(Option.IsValid() ? Option->DisplayName : FString(TEXT("Choose material")));
-				})
-			]
+			SNew(STextBlock)
+			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 14))
+			.Text(FText::FromString(Option.IsValid() ? Option->DisplayName : FString(TEXT("None"))))
 		];
 }
 
-TSharedRef<SWidget> SHTMaterialSlotMapper::MakeMaterialComboItem(TSharedPtr<FMaterialOption> Option) const
+TSharedRef<SWidget> SHTMaterialSlotMapper::MakeMaterialPreview(UMaterialInterface* Material, const uint32 Size)
 {
-	return SNew(STextBlock)
-		.Text(FText::FromString(Option.IsValid() ? Option->DisplayName : FString(TEXT("None"))));
+	if (!Material)
+	{
+		return SNew(SBorder)
+			.Padding(1)
+			.BorderImage(FAppStyle::GetBrush("Brushes.Recessed"))
+			[
+				SNew(SBox)
+				.WidthOverride(Size)
+				.HeightOverride(Size)
+			];
+	}
+
+	TSharedPtr<ISlateViewport> Viewport = MakeShared<HTMaterialSlotMapper::FRenderedMaterialThumbnailViewport>(Material, Size);
+	MaterialPreviewViewports.Add(Viewport);
+	return SNew(SBox)
+		.WidthOverride(Size)
+		.HeightOverride(Size)
+		[
+			SNew(SViewport)
+			.EnableGammaCorrection(false)
+			.ViewportInterface(Viewport.ToSharedRef())
+		];
+}
+
+void SHTMaterialSlotMapper::RefreshMappingMaterialPreview(TSharedPtr<FMappingRow> Mapping)
+{
+	if (!Mapping.IsValid() || !Mapping->MaterialPreviewBox.IsValid())
+	{
+		return;
+	}
+
+	const TSharedPtr<FMaterialOption> Option = FindMaterialOptionByPath(Mapping->MaterialPath);
+	Mapping->MaterialPreviewBox->SetContent(MakeMaterialPreview(Option.IsValid() ? Option->Material.Get() : nullptr, 42));
 }
 
 FReply SHTMaterialSlotMapper::OnAutoMatchClicked()
