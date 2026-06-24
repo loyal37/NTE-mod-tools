@@ -41,6 +41,7 @@ private:
 	struct FMappingRow
 	{
 		FString MaterialPath;
+		FString SlotIds;
 		TSharedPtr<SBox> MaterialPreviewBox;
 		TSharedPtr<SEditableTextBox> SlotIdsBox;
 	};
@@ -56,6 +57,8 @@ private:
 	TSharedRef<SWidget> MakeMaterialComboItem(TSharedPtr<FMaterialOption> Option);
 	TSharedRef<SWidget> MakeMaterialPreview(UMaterialInterface* Material, uint32 Size);
 	void RefreshMappingMaterialPreview(TSharedPtr<FMappingRow> Mapping);
+	void RefreshAssignedSlotIds();
+	bool IsSlotAssigned(int32 SlotIndex) const;
 
 	FReply OnAutoMatchClicked();
 	FReply OnAddMappingClicked();
@@ -76,6 +79,7 @@ private:
 	TArray<FSlotEntry> Slots;
 	TArray<TSharedPtr<FMaterialOption>> MaterialOptions;
 	TArray<TSharedPtr<FMappingRow>> MappingRows;
+	TSet<int32> AssignedSlotIds;
 	TArray<TSharedPtr<ISlateViewport>> MaterialPreviewViewports;
 
 	TSharedPtr<SVerticalBox> SlotListBox;

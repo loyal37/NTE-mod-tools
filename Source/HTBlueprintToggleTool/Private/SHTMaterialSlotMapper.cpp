@@ -25,7 +25,6 @@
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSeparator.h"
-#include "Widgets/Layout/SSplitter.h"
 #include "Widgets/Notifications/SNotificationList.h"
 #include "Widgets/SViewport.h"
 #include "Widgets/Text/STextBlock.h"
@@ -428,9 +427,17 @@ TSharedRef<SWidget> SHTMaterialSlotMapper::MakeSlotRow(const int32 SlotIndex)
 {
 	FSlotEntry& Entry = Slots[SlotIndex];
 	const FString MaterialName = Entry.Material.IsValid() ? Entry.Material->GetName() : FString(TEXT("None"));
+	const bool bAssigned = IsSlotAssigned(Entry.Index);
+	const FSlateColor SlotTextColor = bAssigned
+		? FSlateColor(FLinearColor(0.44f, 0.44f, 0.44f, 1.0f))
+		: FSlateColor::UseForeground();
+	const FSlateColor CurrentTextColor = bAssigned
+		? FSlateColor(FLinearColor(0.34f, 0.34f, 0.34f, 1.0f))
+		: FSlateColor::UseSubduedForeground();
 	return SNew(SBorder)
 		.Padding(FMargin(8, 7))
 		.BorderImage(FAppStyle::GetBrush("Brushes.Panel"))
+		.BorderBackgroundColor(bAssigned ? FLinearColor(0.08f, 0.08f, 0.08f, 1.0f) : FLinearColor::White)
 		[
 			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot()
@@ -462,6 +469,7 @@ TSharedRef<SWidget> SHTMaterialSlotMapper::MakeSlotRow(const int32 SlotIndex)
 					SNew(STextBlock)
 					.Text(FText::Format(LOCTEXT("SlotLabel", "Slot {0}: {1}"), FText::AsNumber(Entry.Index), FText::FromString(GetSlotName(Entry))))
 					.Font(FCoreStyle::GetDefaultFontStyle("Bold", 14))
+					.ColorAndOpacity(SlotTextColor)
 					.MinDesiredWidth(0.0f)
 					.Clipping(EWidgetClipping::ClipToBounds)
 				]
@@ -472,7 +480,7 @@ TSharedRef<SWidget> SHTMaterialSlotMapper::MakeSlotRow(const int32 SlotIndex)
 					SNew(STextBlock)
 					.Text(FText::Format(LOCTEXT("CurrentMaterial", "Current: {0}"), FText::FromString(MaterialName)))
 					.Font(FCoreStyle::GetDefaultFontStyle("Regular", 13))
-					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+					.ColorAndOpacity(CurrentTextColor)
 					.MinDesiredWidth(0.0f)
 					.Clipping(EWidgetClipping::ClipToBounds)
 				]
@@ -513,7 +521,17 @@ TSharedRef<SWidget> SHTMaterialSlotMapper::MakeMappingRow(TSharedPtr<FMappingRow
 				.FillWidth(1.0f)
 				[
 					SAssignNew(Mapping->SlotIdsBox, SEditableTextBox)
+					.Text(FText::FromString(Mapping->SlotIds))
 					.HintText(LOCTEXT("SlotIdsHint", "Example: 1,5,15,16"))
+					.OnTextChanged_Lambda([this, Mapping](const FText& NewText)
+					{
+						if (Mapping.IsValid())
+						{
+							Mapping->SlotIds = NewText.ToString();
+							RefreshAssignedSlotIds();
+							RebuildSlotList();
+						}
+					})
 				]
 			]
 			+ SVerticalBox::Slot()
@@ -707,6 +725,8 @@ FReply SHTMaterialSlotMapper::OnAddMappingClicked()
 {
 	MappingRows.Add(MakeShared<FMappingRow>());
 	RebuildMappingRows();
+	RefreshAssignedSlotIds();
+	RebuildSlotList();
 	return FReply::Handled();
 }
 
@@ -715,16 +735,28 @@ FReply SHTMaterialSlotMapper::OnRemoveMappingClicked(TSharedPtr<FMappingRow> Map
 	if (MappingRows.Num() > 1)
 	{
 		MappingRows.Remove(Mapping);
+		RefreshAssignedSlotIds();
 		RebuildMappingRows();
+		RebuildSlotList();
 	}
 	return FReply::Handled();
 }
 
 FReply SHTMaterialSlotMapper::OnUseCheckedSlotsClicked(TSharedPtr<FMappingRow> Mapping)
 {
-	if (Mapping.IsValid() && Mapping->SlotIdsBox.IsValid())
+	if (Mapping.IsValid())
 	{
-		Mapping->SlotIdsBox->SetText(FText::FromString(GetCheckedSlotIds()));
+		Mapping->SlotIds = GetCheckedSlotIds();
+		if (Mapping->SlotIdsBox.IsValid())
+		{
+			Mapping->SlotIdsBox->SetText(FText::FromString(Mapping->SlotIds));
+		}
+		for (FSlotEntry& Slot : Slots)
+		{
+			Slot.bChecked = false;
+		}
+		RefreshAssignedSlotIds();
+		RebuildSlotList();
 	}
 	return FReply::Handled();
 }
@@ -758,7 +790,8 @@ FReply SHTMaterialSlotMapper::OnApplyMappingsClicked()
 
 		TArray<int32> SlotIds;
 		FString Error;
-		if (!ParseSlotIds(HTMaterialSlotMapper::TextBoxString(Mapping->SlotIdsBox), SlotIds, Error))
+		const FString SlotIdsText = Mapping->SlotIdsBox.IsValid() ? HTMaterialSlotMapper::TextBoxString(Mapping->SlotIdsBox) : Mapping->SlotIds;
+		if (!ParseSlotIds(SlotIdsText, SlotIds, Error))
 		{
 			ShowStatus(FText::FromString(Error), true);
 			return FReply::Handled();
@@ -805,6 +838,9 @@ bool SHTMaterialSlotMapper::ParseSlotIds(const FString& RawValue, TArray<int32>&
 	FString Normalized = RawValue;
 	Normalized.TrimStartAndEndInline();
 	Normalized.ReplaceInline(TEXT(";"), TEXT(","));
+	Normalized.ReplaceInline(TEXT("；"), TEXT(","));
+	Normalized.ReplaceInline(TEXT("，"), TEXT(","));
+	Normalized.ReplaceInline(TEXT("、"), TEXT(","));
 	Normalized.ReplaceInline(TEXT(" "), TEXT(","));
 	Normalized.ReplaceInline(TEXT("\r"), TEXT(","));
 	Normalized.ReplaceInline(TEXT("\n"), TEXT(","));
@@ -894,6 +930,47 @@ bool SHTMaterialSlotMapper::ApplySlotAssignments(const TMap<int32, UMaterialInte
 
 	OutMessage = FString::Printf(TEXT("Applied %d material slot assignment(s):\n%s"), Assignments.Num(), *FString::Join(AppliedLines, TEXT("\n")));
 	return true;
+}
+
+void SHTMaterialSlotMapper::RefreshAssignedSlotIds()
+{
+	AssignedSlotIds.Reset();
+	for (const TSharedPtr<FMappingRow>& Mapping : MappingRows)
+	{
+		if (!Mapping.IsValid())
+		{
+			continue;
+		}
+
+		FString Normalized = Mapping->SlotIdsBox.IsValid() ? HTMaterialSlotMapper::TextBoxString(Mapping->SlotIdsBox) : Mapping->SlotIds;
+		Mapping->SlotIds = Normalized;
+		Normalized.TrimStartAndEndInline();
+		Normalized.ReplaceInline(TEXT(";"), TEXT(","));
+		Normalized.ReplaceInline(TEXT("；"), TEXT(","));
+		Normalized.ReplaceInline(TEXT("，"), TEXT(","));
+		Normalized.ReplaceInline(TEXT("、"), TEXT(","));
+		Normalized.ReplaceInline(TEXT(" "), TEXT(","));
+		Normalized.ReplaceInline(TEXT("\r"), TEXT(","));
+		Normalized.ReplaceInline(TEXT("\n"), TEXT(","));
+		Normalized.ReplaceInline(TEXT("\t"), TEXT(","));
+
+		TArray<FString> Parts;
+		Normalized.ParseIntoArray(Parts, TEXT(","), true);
+		for (FString Part : Parts)
+		{
+			Part.TrimStartAndEndInline();
+			int32 SlotId = INDEX_NONE;
+			if (LexTryParseString(SlotId, *Part) && Slots.IsValidIndex(SlotId))
+			{
+				AssignedSlotIds.Add(SlotId);
+			}
+		}
+	}
+}
+
+bool SHTMaterialSlotMapper::IsSlotAssigned(const int32 SlotIndex) const
+{
+	return AssignedSlotIds.Contains(SlotIndex);
 }
 
 FString SHTMaterialSlotMapper::GetCheckedSlotIds() const
