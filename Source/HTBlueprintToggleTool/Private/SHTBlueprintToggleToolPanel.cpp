@@ -137,6 +137,20 @@ namespace HTTogglePanel
 		return ObjectTools::SanitizeObjectName(FolderName);
 	}
 
+	static FString MakeCharacterScopedSlotName(const FString& ToggleVariableName, const FString& CharacterFolder)
+	{
+		FString SlotName = ToggleVariableName;
+		SlotName.TrimStartAndEndInline();
+
+		const FString CharacterName = MakeCharacterAssetBaseName(CharacterFolder);
+		if (!SlotName.IsEmpty() && !CharacterName.IsEmpty())
+		{
+			SlotName += TEXT(" ");
+			SlotName += CharacterName;
+		}
+		return SlotName;
+	}
+
 	template <typename ObjectType>
 	static ObjectType* LoadAsset(const FString& RawPath)
 	{
@@ -481,7 +495,7 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 				.Padding(0, 0, 0, 12)
 				[
 					SNew(STextBlock)
-					.Text(LOCTEXT("Subtitle", "Generate material visibility or multi-slot, multi-texture toggle nodes. Save Variable and Save Slot are derived from Anim Variable."))
+					.Text(LOCTEXT("Subtitle", "Generate material visibility or multi-slot, multi-texture toggle nodes. Save Variable is derived from Anim Variable; Save Slot also includes the character name."))
 					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 					.AutoWrapText(true)
 				]
@@ -579,7 +593,7 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						LOCTEXT("ToggleVar", "Anim Variable"),
 						SAssignNew(ToggleVariableBox, SEditableTextBox)
 						.HintText(LOCTEXT("ToggleVarHint", "Example: Glove"))
-						.ToolTipText(LOCTEXT("ToggleVarTooltip", "Save Variable will be AnimVariable + Save. Save Slot will match Anim Variable.")))
+						.ToolTipText(LOCTEXT("ToggleVarTooltip", "Save Variable will be AnimVariable + Save. Save Slot will be AnimVariable + character name.")))
 				]
 
 				+ SVerticalBox::Slot()
@@ -1993,7 +2007,10 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	Params.SaveGameBlueprintPath = SaveGameBlueprintPath;
 	Params.ToggleVariableName = ToggleVariableName;
 	Params.SaveVariableName.Empty();
-	Params.SlotName.Empty();
+	FString EffectiveCharacterFolder = CharacterFolderPath.IsEmpty() ? InferCharacterFolderFromAnimBlueprint() : CharacterFolderPath;
+	EffectiveCharacterFolder.TrimStartAndEndInline();
+	EffectiveCharacterFolder.ReplaceInline(TEXT("\\"), TEXT("/"));
+	Params.SlotName = MakeCharacterScopedSlotName(ToggleVariableName, EffectiveCharacterFolder);
 	Params.KeyName = KeyName;
 	Params.MaterialIDs = MaterialIDs;
 	Params.MaterialID = MaterialIDs.Num() > 0 ? MaterialIDs[0] : 0;

@@ -21,7 +21,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.11.zip
+   HTToggleTool-v1.5.12.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -63,7 +63,7 @@ SaveGame 命名由 `Anim Variable` 自动派生：
 
 ```text
 Save Variable = AnimVariable + Save
-Save Slot = AnimVariable
+Save Slot = AnimVariable + character name
 ```
 
 ## 材质槽分配

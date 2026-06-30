@@ -17,6 +17,8 @@ private:
 	void RegisterMenus();
 	void OpenMaterialAnalysisWindow();
 	void OpenMaterialSlotMapperWindow();
+	void MigrateSaveSlotNames();
+	void MigrateSaveSlotNamesAndExit();
 	TSharedRef<class SDockTab> SpawnPluginTab(const class FSpawnTabArgs& SpawnTabArgs);
 
 	static const FName ToolTabName;
@@ -24,4 +26,6 @@ private:
 	TUniquePtr<FAutoConsoleCommand> OpenWindowConsoleCommand;
 	TUniquePtr<FAutoConsoleCommand> OpenMaterialAnalysisConsoleCommand;
 	TUniquePtr<FAutoConsoleCommand> OpenMaterialSlotMapperConsoleCommand;
+	TUniquePtr<FAutoConsoleCommand> MigrateSaveSlotNamesConsoleCommand;
+	TUniquePtr<FAutoConsoleCommand> MigrateSaveSlotNamesAndExitConsoleCommand;
 };
