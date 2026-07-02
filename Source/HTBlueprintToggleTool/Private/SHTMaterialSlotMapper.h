@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/SCompoundWidget.h"
 
 class SCheckBox;
@@ -57,14 +58,17 @@ private:
 	TSharedRef<SWidget> MakeMaterialComboItem(TSharedPtr<FMaterialOption> Option);
 	TSharedRef<SWidget> MakeMaterialPreview(UMaterialInterface* Material, uint32 Size);
 	void RefreshMappingMaterialPreview(TSharedPtr<FMappingRow> Mapping);
+	void RefreshAllMaterialPreviews();
 	void RefreshAssignedSlotIds();
 	bool IsSlotAssigned(int32 SlotIndex) const;
+	void OnSlotCheckStateChanged(ECheckBoxState NewState, int32 SlotIndex);
 
 	FReply OnAutoMatchClicked();
 	FReply OnAddMappingClicked();
 	FReply OnRemoveMappingClicked(TSharedPtr<FMappingRow> Mapping);
 	FReply OnUseCheckedSlotsClicked(TSharedPtr<FMappingRow> Mapping);
 	FReply OnClearCheckedSlotsClicked();
+	FReply OnRefreshPreviewsClicked();
 	FReply OnApplyMappingsClicked();
 
 	TSharedPtr<FMaterialOption> FindMaterialOptionByPath(const FString& ObjectPath) const;
@@ -81,6 +85,7 @@ private:
 	TArray<TSharedPtr<FMappingRow>> MappingRows;
 	TSet<int32> AssignedSlotIds;
 	TArray<TSharedPtr<ISlateViewport>> MaterialPreviewViewports;
+	int32 LastCheckedSlotIndex = INDEX_NONE;
 
 	TSharedPtr<SVerticalBox> SlotListBox;
 	TSharedPtr<SVerticalBox> MappingRowsBox;

@@ -56,6 +56,7 @@ private:
 	void OnSaveGameBlueprintChanged(const FAssetData& AssetData);
 	void OnCharacterFolderCommitted(const FText& Text, ETextCommit::Type CommitType);
 	void OnCharacterFolderPicked(const FString& NewPath);
+	bool SyncBlueprintPathsFromCharacterFolder();
 	void OnSourceMaterialChanged(const FAssetData& AssetData);
 	void OnTextureChanged(const FAssetData& AssetData, int32 TextureIndex);
 	void LoadBlueprintSettings();
@@ -95,7 +96,6 @@ private:
 	TSharedPtr<SEditableTextBox> MaterialSlotsBox;
 	TSharedPtr<SEditableTextBox> CharacterFolderBox;
 	TSharedPtr<SEditableTextBox> TextureParameterBox;
-	TSharedPtr<SCheckBox> MultiMaterialCheckBox;
 	TSharedPtr<SWidgetSwitcher> ModeOptionsSwitcher;
 	TSharedPtr<SVerticalBox> TextureRowsBox;
 	TSharedPtr<SCheckBox> InitGraphCheckBox;

@@ -6,6 +6,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Engine/SkeletalMesh.h"
 #include "FileHelpers.h"
+#include "Framework/Application/SlateApplication.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/ObjectThumbnail.h"
@@ -240,10 +241,19 @@ void SHTMaterialSlotMapper::Construct(const FArguments& InArgs)
 							]
 							+ SHorizontalBox::Slot()
 							.AutoWidth()
+							.Padding(0, 0, 6, 0)
 							[
 								SNew(SButton)
 								.Text(LOCTEXT("ClearChecked", "Clear"))
 								.OnClicked(this, &SHTMaterialSlotMapper::OnClearCheckedSlotsClicked)
+							]
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							[
+								SNew(SButton)
+								.Text(LOCTEXT("RefreshPreviews", "Refresh"))
+								.ToolTipText(LOCTEXT("RefreshPreviewsTip", "Refresh material preview thumbnails."))
+								.OnClicked(this, &SHTMaterialSlotMapper::OnRefreshPreviewsClicked)
 							]
 						]
 						+ SVerticalBox::Slot()
@@ -452,10 +462,7 @@ TSharedRef<SWidget> SHTMaterialSlotMapper::MakeSlotRow(const int32 SlotIndex)
 				})
 				.OnCheckStateChanged_Lambda([this, SlotIndex](const ECheckBoxState NewState)
 				{
-					if (Slots.IsValidIndex(SlotIndex))
-					{
-						Slots[SlotIndex].bChecked = NewState == ECheckBoxState::Checked;
-					}
+					OnSlotCheckStateChanged(NewState, SlotIndex);
 				})
 			]
 			+ SHorizontalBox::Slot()
@@ -678,6 +685,42 @@ void SHTMaterialSlotMapper::RefreshMappingMaterialPreview(TSharedPtr<FMappingRow
 	Mapping->MaterialPreviewBox->SetContent(MakeMaterialPreview(Option.IsValid() ? Option->Material.Get() : nullptr, 42));
 }
 
+void SHTMaterialSlotMapper::RefreshAllMaterialPreviews()
+{
+	MaterialPreviewViewports.Reset();
+	RebuildMappingRows();
+}
+
+void SHTMaterialSlotMapper::OnSlotCheckStateChanged(const ECheckBoxState NewState, const int32 SlotIndex)
+{
+	if (!Slots.IsValidIndex(SlotIndex))
+	{
+		return;
+	}
+
+	const bool bChecked = NewState == ECheckBoxState::Checked;
+	const bool bShiftDown = FSlateApplication::IsInitialized() && FSlateApplication::Get().GetModifierKeys().IsShiftDown();
+	if (bShiftDown && LastCheckedSlotIndex != INDEX_NONE && Slots.IsValidIndex(LastCheckedSlotIndex))
+	{
+		const int32 RangeStart = FMath::Min(LastCheckedSlotIndex, SlotIndex);
+		const int32 RangeEnd = FMath::Max(LastCheckedSlotIndex, SlotIndex);
+		for (int32 Index = RangeStart; Index <= RangeEnd; ++Index)
+		{
+			Slots[Index].bChecked = bChecked;
+		}
+	}
+	else
+	{
+		Slots[SlotIndex].bChecked = bChecked;
+	}
+
+	LastCheckedSlotIndex = SlotIndex;
+	if (SlotListBox.IsValid())
+	{
+		SlotListBox->Invalidate(EInvalidateWidgetReason::Paint);
+	}
+}
+
 FReply SHTMaterialSlotMapper::OnAutoMatchClicked()
 {
 	TMap<FString, UMaterialInterface*> MaterialsByName;
@@ -755,6 +798,7 @@ FReply SHTMaterialSlotMapper::OnUseCheckedSlotsClicked(TSharedPtr<FMappingRow> M
 		{
 			Slot.bChecked = false;
 		}
+		LastCheckedSlotIndex = INDEX_NONE;
 		RefreshAssignedSlotIds();
 		RebuildSlotList();
 	}
@@ -767,7 +811,15 @@ FReply SHTMaterialSlotMapper::OnClearCheckedSlotsClicked()
 	{
 		Slot.bChecked = false;
 	}
+	LastCheckedSlotIndex = INDEX_NONE;
 	RebuildSlotList();
+	return FReply::Handled();
+}
+
+FReply SHTMaterialSlotMapper::OnRefreshPreviewsClicked()
+{
+	RefreshAllMaterialPreviews();
+	ShowStatus(LOCTEXT("PreviewsRefreshed", "Material previews refreshed."));
 	return FReply::Handled();
 }
 

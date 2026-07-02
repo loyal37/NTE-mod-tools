@@ -21,7 +21,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.12.zip
+   HTToggleTool-v1.5.13.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -37,12 +37,12 @@
 
 ## 蓝图切换
 
-在 `Settings` 中选择动画蓝图、SaveGame 蓝图和角色文件夹，选择结果会保存到当前工程配置中，关闭并重新打开工具后仍会保留。角色文件夹用于扫描当前角色可用的材质球。
+在 `Settings` 中选择动画蓝图、SaveGame 蓝图和角色文件夹，选择结果会保存到当前工程配置中，关闭并重新打开工具后仍会保留。切换角色文件夹时，工具会自动查找该角色文件夹内的 AnimBP 和 SaveGame 蓝图并填入上方路径。角色文件夹用于扫描当前角色可用的材质球。
 点击 `Create AnimBP + SaveGame and bind Skeletal Mesh` 后，插件会按角色文件夹名称创建对应的动画蓝图和 SaveGame 蓝图，自动把 AnimGraph 中的 `Input Pose` 连接到 `Output Pose`，并把该动画蓝图写入角色骨骼网格体的后期处理动画蓝图设置中。
 
 `Function Switch` 可切换功能：
 
-- `Material visibility`：材质区域显示/隐藏。
+- `Material visibility`：材质区域显示/隐藏；`Material ID(s)` 会自动根据输入数量判断单材质或多材质，例如 `16` 或 `13,20`。
 - `Texture switch`：材质贴图循环切换。
 - `Material Instance`：重建材质节点并创建材质实例。
 - `Slot Materials`：处理骨骼网格体材质槽的材质球分配。
@@ -72,7 +72,7 @@ Save Slot = AnimVariable + character name
 
 工具会读取当前 AnimBP 的预览骨骼网格体，并显示所有材质槽的 ID、插槽名和当前材质。同时会递归扫描 `Settings` 中的角色文件夹，列出其中的材质球和材质实例。
 材质槽名称会以较大的粗体显示；选择材质球时，下拉列表和当前选择区域都会显示材质球预览图，方便区分相近名称的材质。
-点击 `Use checked slots` 后，左侧对应的材质槽会变暗表示已分配，并自动清空这次勾选，方便继续选择下一组材质槽。
+点击 `Use checked slots` 后，左侧对应的材质槽会变暗表示已分配，并自动清空这次勾选，方便继续选择下一组材质槽。左侧材质槽支持 Shift 区间勾选；右侧 `Refresh` 可重新生成材质球预览图。
 
 可用操作：
 

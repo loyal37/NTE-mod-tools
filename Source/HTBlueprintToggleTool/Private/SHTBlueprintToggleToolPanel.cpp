@@ -624,16 +624,6 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 								SAssignNew(MaterialIDsBox, SEditableTextBox)
 								.HintText(LOCTEXT("MaterialIDsHint", "Single: 16    Multiple: 13,20")))
 						]
-						+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(150, 0, 0, 6)
-						[
-							SAssignNew(MultiMaterialCheckBox, SCheckBox)
-							.IsChecked(ECheckBoxState::Unchecked)
-							[
-								SNew(STextBlock).Text(LOCTEXT("MultiMaterial", "Multiple materials"))
-							]
-						]
 					]
 
 					+ SWidgetSwitcher::Slot()
@@ -1480,6 +1470,8 @@ FReply SHTBlueprintToggleToolPanel::OnBrowseCharacterFolderClicked()
 void SHTBlueprintToggleToolPanel::OnCharacterFolderCommitted(const FText& Text, ETextCommit::Type)
 {
 	CharacterFolderPath = Text.ToString().TrimStartAndEnd();
+	CharacterFolderPath.ReplaceInline(TEXT("\\"), TEXT("/"));
+	SyncBlueprintPathsFromCharacterFolder();
 	SaveBlueprintSettings();
 	UpdateAssetSummaryText();
 }
@@ -1487,6 +1479,8 @@ void SHTBlueprintToggleToolPanel::OnCharacterFolderCommitted(const FText& Text, 
 void SHTBlueprintToggleToolPanel::OnCharacterFolderPicked(const FString& NewPath)
 {
 	CharacterFolderPath = NewPath;
+	CharacterFolderPath.ReplaceInline(TEXT("\\"), TEXT("/"));
+	SyncBlueprintPathsFromCharacterFolder();
 	if (CharacterFolderBox.IsValid())
 	{
 		CharacterFolderBox->SetText(FText::FromString(CharacterFolderPath));
@@ -1816,6 +1810,102 @@ FString SHTBlueprintToggleToolPanel::InferCharacterFolderFromAnimBlueprint() con
 	return TEXT("/Game/Characters/Player");
 }
 
+bool SHTBlueprintToggleToolPanel::SyncBlueprintPathsFromCharacterFolder()
+{
+	CharacterFolderPath.TrimStartAndEndInline();
+	CharacterFolderPath.ReplaceInline(TEXT("\\"), TEXT("/"));
+	if (!FPackageName::IsValidLongPackageName(CharacterFolderPath))
+	{
+		return false;
+	}
+
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+	TArray<FAssetData> Assets;
+	AssetRegistryModule.Get().GetAssetsByPath(FName(*CharacterFolderPath), Assets, true);
+
+	const FString BaseName = HTTogglePanel::MakeCharacterAssetBaseName(CharacterFolderPath).ToLower();
+	FString BestAnimPath;
+	FString BestSavePath;
+	int32 BestAnimScore = MIN_int32;
+	int32 BestSaveScore = MIN_int32;
+	const TArray<FString> AnimKeywords = { TEXT("animbp"), TEXT("animblueprint"), TEXT("anim_blueprint") };
+	const TArray<FString> SaveKeywords = { TEXT("savegame"), TEXT("saved"), TEXT("save") };
+
+	auto ScoreAssetName = [&BaseName, this](const FAssetData& AssetData, const TArray<FString>& Keywords)
+	{
+		const FString LowerName = AssetData.AssetName.ToString().ToLower();
+		int32 Score = AssetData.PackagePath.ToString() == CharacterFolderPath ? 100 : 0;
+		if (!BaseName.IsEmpty() && LowerName.Contains(BaseName))
+		{
+			Score += 30;
+		}
+		for (const FString& Keyword : Keywords)
+		{
+			if (LowerName.Contains(Keyword))
+			{
+				Score += 20;
+			}
+		}
+		if (LowerName == BaseName || LowerName.StartsWith(BaseName + TEXT("_")))
+		{
+			Score += 10;
+		}
+		return Score;
+	};
+
+	for (const FAssetData& AssetData : Assets)
+	{
+		if (AssetData.AssetClassPath == UAnimBlueprint::StaticClass()->GetClassPathName())
+		{
+			const int32 Score = ScoreAssetName(AssetData, AnimKeywords);
+			if (Score > BestAnimScore)
+			{
+				BestAnimScore = Score;
+				BestAnimPath = AssetData.GetSoftObjectPath().ToString();
+			}
+			continue;
+		}
+
+		if (AssetData.AssetClassPath != UBlueprint::StaticClass()->GetClassPathName())
+		{
+			continue;
+		}
+
+		const FString LowerName = AssetData.AssetName.ToString().ToLower();
+		bool bIsSaveGameBlueprint = LowerName.Contains(TEXT("save"));
+		if (UBlueprint* Blueprint = Cast<UBlueprint>(AssetData.GetAsset()))
+		{
+			bIsSaveGameBlueprint =
+				bIsSaveGameBlueprint ||
+				(Blueprint->ParentClass && Blueprint->ParentClass->IsChildOf(USaveGame::StaticClass())) ||
+				(Blueprint->GeneratedClass && Blueprint->GeneratedClass->IsChildOf(USaveGame::StaticClass()));
+		}
+
+		if (bIsSaveGameBlueprint)
+		{
+			const int32 Score = ScoreAssetName(AssetData, SaveKeywords);
+			if (Score > BestSaveScore)
+			{
+				BestSaveScore = Score;
+				BestSavePath = AssetData.GetSoftObjectPath().ToString();
+			}
+		}
+	}
+
+	bool bChanged = false;
+	if (!BestAnimPath.IsEmpty() && AnimBlueprintPath != BestAnimPath)
+	{
+		AnimBlueprintPath = MoveTemp(BestAnimPath);
+		bChanged = true;
+	}
+	if (!BestSavePath.IsEmpty() && SaveGameBlueprintPath != BestSavePath)
+	{
+		SaveGameBlueprintPath = MoveTemp(BestSavePath);
+		bChanged = true;
+	}
+	return bChanged;
+}
+
 bool SHTBlueprintToggleToolPanel::ParseMaterialIDs(TArray<int32>& OutMaterialIDs, FString& OutError) const
 {
 	OutMaterialIDs.Reset();
@@ -1825,13 +1915,14 @@ bool SHTBlueprintToggleToolPanel::ParseMaterialIDs(TArray<int32>& OutMaterialIDs
 	RawValue.ReplaceInline(TEXT("，"), TEXT(","));
 	RawValue.ReplaceInline(TEXT(";"), TEXT(","));
 	RawValue.ReplaceInline(TEXT("；"), TEXT(","));
+	RawValue.ReplaceInline(TEXT(" "), TEXT(","));
 	RawValue.ReplaceInline(TEXT("\r"), TEXT(","));
 	RawValue.ReplaceInline(TEXT("\n"), TEXT(","));
 	RawValue.ReplaceInline(TEXT("\t"), TEXT(","));
 
 	if (RawValue.IsEmpty())
 	{
-		OutError = TEXT("请填写 Material ID。单材质示例: 16；多材质示例: 13,20");
+		OutError = TEXT("Enter at least one Material ID. Single example: 16; multiple example: 13,20.");
 		return false;
 	}
 
@@ -1848,23 +1939,16 @@ bool SHTBlueprintToggleToolPanel::ParseMaterialIDs(TArray<int32>& OutMaterialIDs
 		int32 MaterialID = INDEX_NONE;
 		if (!LexTryParseString(MaterialID, *Part) || MaterialID < 0)
 		{
-			OutError = FString::Printf(TEXT("Material ID 无效: %s"), *Part);
+			OutError = FString::Printf(TEXT("Invalid Material ID: %s"), *Part);
 			return false;
 		}
 
-		OutMaterialIDs.Add(MaterialID);
+		OutMaterialIDs.AddUnique(MaterialID);
 	}
 
-	const bool bMultiMaterial = MultiMaterialCheckBox.IsValid() && MultiMaterialCheckBox->IsChecked();
-	if (bMultiMaterial && OutMaterialIDs.Num() < 2)
+	if (OutMaterialIDs.Num() == 0)
 	{
-		OutError = TEXT("多材质模式至少需要填写两个 Material ID，例如: 13,20");
-		return false;
-	}
-
-	if (!bMultiMaterial && OutMaterialIDs.Num() != 1)
-	{
-		OutError = TEXT("单材质模式只能填写一个 Material ID；如果要填写多个，请勾选 Multiple materials。");
+		OutError = TEXT("Enter at least one valid Material ID.");
 		return false;
 	}
 
