@@ -21,7 +21,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.13.zip
+   HTToggleTool-v1.5.14.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -48,6 +48,7 @@
 - `Slot Materials`：处理骨骼网格体材质槽的材质球分配。
 
 在 `Texture switch` 模式中点击 `Material Slot(s)` 右侧的 `Analyze`，插件会分析当前 AnimBP 的预览骨骼网格体，把使用同一个材质的 Slot 分到同一组。选择某一组后，会自动填写该组的全部 Slot ID，并同步填写 `Source Material`。分组列表会显示对应材质的材质球缩略图，不再使用贴图参数作为预览图。
+选择 `Texture 1/2/...` 时，贴图资产列表会限制在 `Settings` 当前选择的角色文件夹及其子目录内，避免误选其他角色的贴图。
 
 示例：
 

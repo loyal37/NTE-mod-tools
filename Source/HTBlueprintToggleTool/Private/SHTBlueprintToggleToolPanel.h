@@ -59,6 +59,7 @@ private:
 	bool SyncBlueprintPathsFromCharacterFolder();
 	void OnSourceMaterialChanged(const FAssetData& AssetData);
 	void OnTextureChanged(const FAssetData& AssetData, int32 TextureIndex);
+	bool ShouldFilterTextureAsset(const FAssetData& AssetData) const;
 	void LoadBlueprintSettings();
 	void SaveBlueprintSettings() const;
 	void UpdateAssetSummaryText() const;

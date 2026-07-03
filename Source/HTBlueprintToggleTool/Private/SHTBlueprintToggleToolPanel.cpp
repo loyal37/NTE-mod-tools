@@ -1167,6 +1167,7 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTexturePickerRow(int32 Text
 			.AllowedClass(UTexture2D::StaticClass())
 			.AllowClear(false)
 			.DisplayThumbnail(true)
+			.OnShouldFilterAsset(this, &SHTBlueprintToggleToolPanel::ShouldFilterTextureAsset)
 			.ObjectPath(TAttribute<FString>::CreateLambda([this, TextureIndex]()
 			{
 				return TexturePaths.IsValidIndex(TextureIndex) ? TexturePaths[TextureIndex] : FString();
@@ -1762,8 +1763,38 @@ void SHTBlueprintToggleToolPanel::OnTextureChanged(const FAssetData& AssetData, 
 {
 	if (AssetData.IsValid() && TexturePaths.IsValidIndex(TextureIndex))
 	{
+		if (ShouldFilterTextureAsset(AssetData))
+		{
+			ShowPanelError(LOCTEXT("TextureOutsideCharacterFolder", "Choose a texture inside the selected Character Folder."));
+			return;
+		}
 		TexturePaths[TextureIndex] = AssetData.GetSoftObjectPath().ToString();
 	}
+}
+
+bool SHTBlueprintToggleToolPanel::ShouldFilterTextureAsset(const FAssetData& AssetData) const
+{
+	if (!AssetData.IsValid())
+	{
+		return false;
+	}
+
+	FString FilterRoot = CharacterFolderPath.IsEmpty() ? InferCharacterFolderFromAnimBlueprint() : CharacterFolderPath;
+	FilterRoot.TrimStartAndEndInline();
+	FilterRoot.ReplaceInline(TEXT("\\"), TEXT("/"));
+	if (!FPackageName::IsValidLongPackageName(FilterRoot))
+	{
+		return false;
+	}
+
+	FString PackagePath = AssetData.PackagePath.ToString();
+	PackagePath.ReplaceInline(TEXT("\\"), TEXT("/"));
+	FString FilterPrefix = FilterRoot;
+	if (!FilterPrefix.EndsWith(TEXT("/")))
+	{
+		FilterPrefix += TEXT("/");
+	}
+	return PackagePath != FilterRoot && !PackagePath.StartsWith(FilterPrefix);
 }
 
 void SHTBlueprintToggleToolPanel::UpdateAssetSummaryText() const
