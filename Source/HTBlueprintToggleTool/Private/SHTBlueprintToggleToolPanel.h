@@ -40,10 +40,14 @@ private:
 	TSharedRef<SWidget> MakeMaterialSlotsRow();
 	TSharedRef<SWidget> MakeMaterialPickerRow();
 	TSharedRef<SWidget> MakeTexturePickerRow(int32 TextureIndex);
+	TSharedRef<SWidget> MakeMaterialInterfacePickerRow(int32 MaterialIndex);
 	TSharedRef<SWidget> MakeMaterialGroupRow(int32 GroupIndex);
 	void RebuildTextureRows();
+	void RebuildMaterialInterfaceRows();
 	FReply OnAddTextureClicked();
 	FReply OnRemoveTextureClicked(int32 TextureIndex);
+	FReply OnAddMaterialInterfaceClicked();
+	FReply OnRemoveMaterialInterfaceClicked(int32 MaterialIndex);
 	FReply OnAnalyzeMaterialsClicked();
 	FReply OnSelectMaterialGroupClicked(int32 GroupIndex);
 
@@ -59,7 +63,9 @@ private:
 	bool SyncBlueprintPathsFromCharacterFolder();
 	void OnSourceMaterialChanged(const FAssetData& AssetData);
 	void OnTextureChanged(const FAssetData& AssetData, int32 TextureIndex);
+	void OnMaterialInterfaceChanged(const FAssetData& AssetData, int32 MaterialIndex);
 	bool ShouldFilterTextureAsset(const FAssetData& AssetData) const;
+	bool ShouldFilterMaterialInterfaceAsset(const FAssetData& AssetData) const;
 	void LoadBlueprintSettings();
 	void SaveBlueprintSettings() const;
 	void UpdateAssetSummaryText() const;
@@ -82,6 +88,7 @@ private:
 	FString CharacterFolderPath;
 	FString SourceMaterialPath;
 	TArray<FString> TexturePaths;
+	TArray<FString> MaterialInterfacePaths;
 	EHTBlueprintToggleMode ToggleMode = EHTBlueprintToggleMode::MaterialSection;
 	TWeakPtr<SWindow> CookedAssetExporterWindow;
 	TWeakPtr<SWindow> MaterialInstanceCreatorWindow;
@@ -99,6 +106,7 @@ private:
 	TSharedPtr<SEditableTextBox> TextureParameterBox;
 	TSharedPtr<SWidgetSwitcher> ModeOptionsSwitcher;
 	TSharedPtr<SVerticalBox> TextureRowsBox;
+	TSharedPtr<SVerticalBox> MaterialInterfaceRowsBox;
 	TSharedPtr<SCheckBox> InitGraphCheckBox;
 	TSharedPtr<SCheckBox> UpdateGraphCheckBox;
 	TSharedPtr<SCheckBox> SaveAssetsCheckBox;

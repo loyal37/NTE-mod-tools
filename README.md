@@ -21,7 +21,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.14.zip
+   HTToggleTool-v1.5.15.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -44,6 +44,7 @@
 
 - `Material visibility`：材质区域显示/隐藏；`Material ID(s)` 会自动根据输入数量判断单材质或多材质，例如 `16` 或 `13,20`。
 - `Texture switch`：材质贴图循环切换。
+- `Material switch`：对一个或多个 Material Slot 循环切换指定材质球；材质球选择列表会限制在当前 Character Folder 内。
 - `Material Instance`：重建材质节点并创建材质实例。
 - `Slot Materials`：处理骨骼网格体材质槽的材质球分配。
 

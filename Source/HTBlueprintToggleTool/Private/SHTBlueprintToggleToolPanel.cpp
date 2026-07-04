@@ -399,6 +399,7 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 		SaveBlueprintSettings();
 	}
 	TexturePaths.SetNum(2);
+	MaterialInterfacePaths.SetNum(2);
 
 	ChildSlot
 	[
@@ -525,6 +526,8 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						.Text(LOCTEXT("MaterialMode", "Material visibility"))
 						+ SSegmentedControl<EHTBlueprintToggleMode>::Slot(EHTBlueprintToggleMode::Texture)
 						.Text(LOCTEXT("TextureMode", "Texture switch"))
+						+ SSegmentedControl<EHTBlueprintToggleMode>::Slot(EHTBlueprintToggleMode::MaterialInterface)
+						.Text(LOCTEXT("MaterialInterfaceMode", "Material switch"))
 					]
 					+ SHorizontalBox::Slot()
 					.AutoWidth()
@@ -610,7 +613,18 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 				.AutoHeight()
 				[
 					SAssignNew(ModeOptionsSwitcher, SWidgetSwitcher)
-					.WidgetIndex_Lambda([this]() { return ToggleMode == EHTBlueprintToggleMode::Texture ? 1 : 0; })
+					.WidgetIndex_Lambda([this]()
+					{
+						if (ToggleMode == EHTBlueprintToggleMode::Texture)
+						{
+							return 1;
+						}
+						if (ToggleMode == EHTBlueprintToggleMode::MaterialInterface)
+						{
+							return 2;
+						}
+						return 0;
+					})
 
 					+ SWidgetSwitcher::Slot()
 					[
@@ -691,6 +705,56 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 							SAssignNew(TextureRowsBox, SVerticalBox)
 						]
 					]
+
+					+ SWidgetSwitcher::Slot()
+					[
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 6)
+						[
+							MakeMaterialSlotsRow()
+						]
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 6)
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							[
+								SNew(SBox).WidthOverride(150)
+							]
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							[
+								SNew(SButton)
+								.ToolTipText(LOCTEXT("AddMaterialInterfaceTooltip", "Add another material state."))
+								.OnClicked(this, &SHTBlueprintToggleToolPanel::OnAddMaterialInterfaceClicked)
+								[
+									SNew(SHorizontalBox)
+									+ SHorizontalBox::Slot()
+									.AutoWidth()
+									.VAlign(VAlign_Center)
+									.Padding(0, 0, 4, 0)
+									[
+										SNew(SImage).Image(FAppStyle::GetBrush("Icons.Plus"))
+									]
+									+ SHorizontalBox::Slot()
+									.AutoWidth()
+									.VAlign(VAlign_Center)
+									[
+										SNew(STextBlock).Text(LOCTEXT("AddMaterialInterface", "Add material"))
+									]
+								]
+							]
+						]
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						[
+							SAssignNew(MaterialInterfaceRowsBox, SVerticalBox)
+						]
+					]
 				]
 
 				+ SVerticalBox::Slot()
@@ -765,6 +829,7 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 
 	UpdateAssetSummaryText();
 	RebuildTextureRows();
+	RebuildMaterialInterfaceRows();
 }
 
 void SHTBlueprintToggleToolPanel::OpenMaterialAnalysisFromCommand()
@@ -1211,6 +1276,71 @@ void SHTBlueprintToggleToolPanel::RebuildTextureRows()
 	}
 }
 
+TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialInterfacePickerRow(int32 MaterialIndex)
+{
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		[
+			SNew(SBox)
+			.WidthOverride(150)
+			[
+				SNew(STextBlock)
+				.Text(FText::Format(LOCTEXT("MaterialInterfaceStateLabel", "Material {0} (State {1})"), FText::AsNumber(MaterialIndex + 1), FText::AsNumber(MaterialIndex)))
+			]
+		]
+		+ SHorizontalBox::Slot()
+		.FillWidth(1.0f)
+		[
+			SNew(SObjectPropertyEntryBox)
+			.AllowedClass(UMaterialInterface::StaticClass())
+			.AllowClear(false)
+			.DisplayThumbnail(true)
+			.OnShouldFilterAsset(this, &SHTBlueprintToggleToolPanel::ShouldFilterMaterialInterfaceAsset)
+			.ObjectPath(TAttribute<FString>::CreateLambda([this, MaterialIndex]()
+			{
+				return MaterialInterfacePaths.IsValidIndex(MaterialIndex) ? MaterialInterfacePaths[MaterialIndex] : FString();
+			}))
+			.OnObjectChanged(FOnSetObject::CreateLambda([this, MaterialIndex](const FAssetData& AssetData)
+			{
+				OnMaterialInterfaceChanged(AssetData, MaterialIndex);
+			}))
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.Padding(6, 0, 0, 0)
+		[
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.Visibility_Lambda([this]() { return MaterialInterfacePaths.Num() > 2 ? EVisibility::Visible : EVisibility::Collapsed; })
+			.ToolTipText(LOCTEXT("RemoveMaterialInterfaceTooltip", "Remove this material state."))
+			.OnClicked(this, &SHTBlueprintToggleToolPanel::OnRemoveMaterialInterfaceClicked, MaterialIndex)
+			[
+				SNew(SImage).Image(FAppStyle::GetBrush("Icons.Delete"))
+			]
+		];
+}
+
+void SHTBlueprintToggleToolPanel::RebuildMaterialInterfaceRows()
+{
+	if (!MaterialInterfaceRowsBox.IsValid())
+	{
+		return;
+	}
+
+	MaterialInterfaceRowsBox->ClearChildren();
+	for (int32 MaterialIndex = 0; MaterialIndex < MaterialInterfacePaths.Num(); ++MaterialIndex)
+	{
+		MaterialInterfaceRowsBox->AddSlot()
+		.AutoHeight()
+		.Padding(0, 0, 0, 6)
+		[
+			MakeMaterialInterfacePickerRow(MaterialIndex)
+		];
+	}
+}
+
 FReply SHTBlueprintToggleToolPanel::OnAddTextureClicked()
 {
 	TexturePaths.AddDefaulted();
@@ -1224,6 +1354,23 @@ FReply SHTBlueprintToggleToolPanel::OnRemoveTextureClicked(int32 TextureIndex)
 	{
 		TexturePaths.RemoveAt(TextureIndex);
 		RebuildTextureRows();
+	}
+	return FReply::Handled();
+}
+
+FReply SHTBlueprintToggleToolPanel::OnAddMaterialInterfaceClicked()
+{
+	MaterialInterfacePaths.AddDefaulted();
+	RebuildMaterialInterfaceRows();
+	return FReply::Handled();
+}
+
+FReply SHTBlueprintToggleToolPanel::OnRemoveMaterialInterfaceClicked(int32 MaterialIndex)
+{
+	if (MaterialInterfacePaths.Num() > 2 && MaterialInterfacePaths.IsValidIndex(MaterialIndex))
+	{
+		MaterialInterfacePaths.RemoveAt(MaterialIndex);
+		RebuildMaterialInterfaceRows();
 	}
 	return FReply::Handled();
 }
@@ -1772,7 +1919,45 @@ void SHTBlueprintToggleToolPanel::OnTextureChanged(const FAssetData& AssetData, 
 	}
 }
 
+void SHTBlueprintToggleToolPanel::OnMaterialInterfaceChanged(const FAssetData& AssetData, int32 MaterialIndex)
+{
+	if (AssetData.IsValid() && MaterialInterfacePaths.IsValidIndex(MaterialIndex))
+	{
+		if (ShouldFilterMaterialInterfaceAsset(AssetData))
+		{
+			ShowPanelError(LOCTEXT("MaterialInterfaceOutsideCharacterFolder", "Choose a material inside the selected Character Folder."));
+			return;
+		}
+		MaterialInterfacePaths[MaterialIndex] = AssetData.GetSoftObjectPath().ToString();
+	}
+}
+
 bool SHTBlueprintToggleToolPanel::ShouldFilterTextureAsset(const FAssetData& AssetData) const
+{
+	if (!AssetData.IsValid())
+	{
+		return false;
+	}
+
+	FString FilterRoot = CharacterFolderPath.IsEmpty() ? InferCharacterFolderFromAnimBlueprint() : CharacterFolderPath;
+	FilterRoot.TrimStartAndEndInline();
+	FilterRoot.ReplaceInline(TEXT("\\"), TEXT("/"));
+	if (!FPackageName::IsValidLongPackageName(FilterRoot))
+	{
+		return false;
+	}
+
+	FString PackagePath = AssetData.PackagePath.ToString();
+	PackagePath.ReplaceInline(TEXT("\\"), TEXT("/"));
+	FString FilterPrefix = FilterRoot;
+	if (!FilterPrefix.EndsWith(TEXT("/")))
+	{
+		FilterPrefix += TEXT("/");
+	}
+	return PackagePath != FilterRoot && !PackagePath.StartsWith(FilterPrefix);
+}
+
+bool SHTBlueprintToggleToolPanel::ShouldFilterMaterialInterfaceAsset(const FAssetData& AssetData) const
 {
 	if (!AssetData.IsValid())
 	{
@@ -2078,7 +2263,7 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 			return FReply::Handled();
 		}
 	}
-	else
+	else if (ToggleMode == EHTBlueprintToggleMode::Texture)
 	{
 		FString MaterialSlotError;
 		if (!ParseTextureMaterialSlots(TextureMaterialSlots, MaterialSlotError))
@@ -2115,6 +2300,28 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 			}
 		}
 	}
+	else if (ToggleMode == EHTBlueprintToggleMode::MaterialInterface)
+	{
+		FString MaterialSlotError;
+		if (!ParseTextureMaterialSlots(TextureMaterialSlots, MaterialSlotError))
+		{
+			ShowPanelError(FText::FromString(MaterialSlotError));
+			return FReply::Handled();
+		}
+		if (MaterialInterfacePaths.Num() < 2)
+		{
+			ShowPanelError(LOCTEXT("TooFewMaterialInterfaces", "Material switch mode requires at least two materials."));
+			return FReply::Handled();
+		}
+		for (int32 MaterialIndex = 0; MaterialIndex < MaterialInterfacePaths.Num(); ++MaterialIndex)
+		{
+			if (MaterialInterfacePaths[MaterialIndex].IsEmpty())
+			{
+				ShowPanelError(FText::Format(LOCTEXT("MissingMaterialAtIndex", "Choose Material {0}."), FText::AsNumber(MaterialIndex + 1)));
+				return FReply::Handled();
+			}
+		}
+	}
 
 	FHTBlueprintToggleGeneratorParams Params;
 	Params.Mode = ToggleMode;
@@ -2136,6 +2343,7 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	Params.SourceMaterialPath = SourceMaterialPath;
 	Params.TextureParameterName = TextBoxString(TextureParameterBox).TrimStartAndEnd();
 	Params.TexturePaths = TexturePaths;
+	Params.MaterialInterfacePaths = MaterialInterfacePaths;
 	Params.bGenerateInitializeGraph = IsChecked(InitGraphCheckBox);
 	Params.bGenerateUpdateGraph = IsChecked(UpdateGraphCheckBox);
 	Params.bSaveAssets = IsChecked(SaveAssetsCheckBox);
