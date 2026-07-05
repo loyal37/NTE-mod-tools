@@ -25,6 +25,8 @@ public:
 	void OpenMaterialSlotMapperFromCommand();
 
 private:
+	struct FTextureMaterialGroupInput;
+
 	FReply OnGenerateClicked();
 	FReply OnOpenMaterialInstanceCreatorClicked();
 	FReply OnOpenMaterialSlotMapperClicked();
@@ -41,15 +43,15 @@ private:
 	TSharedRef<SWidget> MakeTextureMaterialGroupsHeaderRow();
 	TSharedRef<SWidget> MakeTextureMaterialGroupRow(int32 GroupIndex);
 	TSharedRef<SWidget> MakeMaterialPickerRow();
-	TSharedRef<SWidget> MakeTexturePickerRow(int32 TextureIndex);
+	TSharedRef<SWidget> MakeTexturePickerRow(int32 GroupIndex, int32 TextureIndex);
 	TSharedRef<SWidget> MakeMaterialInterfacePickerRow(int32 MaterialIndex);
 	TSharedRef<SWidget> MakeMaterialGroupRow(int32 GroupIndex);
 	void RebuildTextureMaterialGroupRows();
-	void RebuildTextureRows();
 	void RebuildMaterialInterfaceRows();
 	void CaptureTextureMaterialGroupRows();
-	FReply OnAddTextureClicked();
-	FReply OnRemoveTextureClicked(int32 TextureIndex);
+	void EnsureTextureGroupDefaults(FTextureMaterialGroupInput& Group) const;
+	FReply OnAddTextureClicked(int32 GroupIndex);
+	FReply OnRemoveTextureClicked(int32 GroupIndex, int32 TextureIndex);
 	FReply OnAddTextureMaterialGroupClicked();
 	FReply OnRemoveTextureMaterialGroupClicked(int32 GroupIndex);
 	FReply OnAddMaterialInterfaceClicked();
@@ -72,7 +74,7 @@ private:
 	bool SyncBlueprintPathsFromCharacterFolder();
 	void OnSourceMaterialChanged(const FAssetData& AssetData);
 	void OnTextureGroupSourceMaterialChanged(const FAssetData& AssetData, int32 GroupIndex);
-	void OnTextureChanged(const FAssetData& AssetData, int32 TextureIndex);
+	void OnTextureChanged(const FAssetData& AssetData, int32 GroupIndex, int32 TextureIndex);
 	void OnMaterialInterfaceChanged(const FAssetData& AssetData, int32 MaterialIndex);
 	bool ShouldFilterTextureAsset(const FAssetData& AssetData) const;
 	bool ShouldFilterMaterialInterfaceAsset(const FAssetData& AssetData) const;
@@ -97,6 +99,7 @@ private:
 	{
 		FString SourceMaterialPath;
 		FString SlotList = TEXT("0");
+		TArray<FString> TexturePaths;
 		TSharedPtr<SEditableTextBox> SlotsBox;
 	};
 
@@ -105,7 +108,6 @@ private:
 	FString CharacterFolderPath;
 	FString SourceMaterialPath;
 	TArray<FTextureMaterialGroupInput> TextureMaterialGroups;
-	TArray<FString> TexturePaths;
 	TArray<FString> MaterialInterfacePaths;
 	EHTBlueprintToggleMode ToggleMode = EHTBlueprintToggleMode::MaterialSection;
 	TWeakPtr<SWindow> CookedAssetExporterWindow;
@@ -124,8 +126,8 @@ private:
 	TSharedPtr<SEditableTextBox> TextureParameterBox;
 	TSharedPtr<SWidgetSwitcher> ModeOptionsSwitcher;
 	TSharedPtr<SVerticalBox> TextureMaterialGroupRowsBox;
-	TSharedPtr<SVerticalBox> TextureRowsBox;
 	TSharedPtr<SVerticalBox> MaterialInterfaceRowsBox;
+	TSharedPtr<STextBlock> MaterialAnalysisFeedbackText;
 	TSharedPtr<SCheckBox> InitGraphCheckBox;
 	TSharedPtr<SCheckBox> UpdateGraphCheckBox;
 	TSharedPtr<SCheckBox> SaveAssetsCheckBox;

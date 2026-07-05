@@ -1035,6 +1035,7 @@ namespace HTToggleGenerator
 			FHTTextureMaterialSlotGroup& LegacyGroup = Groups.AddDefaulted_GetRef();
 			LegacyGroup.SourceMaterialPath = Params.SourceMaterialPath;
 			LegacyGroup.MaterialElementIndices = Params.MaterialElementIndices;
+			LegacyGroup.TexturePaths = Params.TexturePaths;
 			if (LegacyGroup.MaterialElementIndices.Num() == 0)
 			{
 				LegacyGroup.MaterialElementIndices.Add(Params.MaterialElementIndex);
@@ -1050,6 +1051,14 @@ namespace HTToggleGenerator
 				UniqueIndices.AddUnique(MaterialElementIndex);
 			}
 			Group.MaterialElementIndices = MoveTemp(UniqueIndices);
+			if (Group.TexturePaths.Num() == 0)
+			{
+				Group.TexturePaths = Params.TexturePaths;
+			}
+			for (FString& TexturePath : Group.TexturePaths)
+			{
+				TexturePath = Trimmed(TexturePath);
+			}
 		}
 
 		Groups.RemoveAll([](const FHTTextureMaterialSlotGroup& Group)
@@ -1101,7 +1110,8 @@ namespace HTToggleGenerator
 	{
 		if (Params.Mode == EHTBlueprintToggleMode::Texture)
 		{
-			return FMath::Max(2, Params.TexturePaths.Num());
+			const TArray<FHTTextureMaterialSlotGroup> Groups = GetTextureMaterialSlotGroups(Params);
+			return Groups.Num() > 0 ? FMath::Max(2, Groups[0].TexturePaths.Num()) : FMath::Max(2, Params.TexturePaths.Num());
 		}
 		if (Params.Mode == EHTBlueprintToggleMode::MaterialInterface)
 		{
@@ -1282,7 +1292,7 @@ namespace HTToggleGenerator
 		UEdGraph* Graph,
 		const FHTBlueprintToggleGeneratorParams& Params,
 		const TArray<FName>& MIDVariables,
-		const TArray<UTexture*>& Textures,
+		const TArray<TArray<UTexture*>>& TextureStatesByMaterial,
 		UEdGraphPin* ExecIn,
 		UEdGraphPin* ValuePin,
 		const FVector2D Base,
@@ -1290,10 +1300,22 @@ namespace HTToggleGenerator
 		TArray<UEdGraphNode*>* OutNodes)
 	{
 		const TArray<int32> MaterialElementIndices = GetMaterialElementIndices(Params);
-		UK2Node_SwitchInteger* SwitchNode = SpawnSwitchOnInt(Graph, Base, Textures.Num());
-		if (!SwitchNode || MIDVariables.Num() == 0 || MIDVariables.Num() != MaterialElementIndices.Num())
+		const int32 TextureStateCount = TextureStatesByMaterial.Num() > 0 ? TextureStatesByMaterial[0].Num() : 0;
+		UK2Node_SwitchInteger* SwitchNode = SpawnSwitchOnInt(Graph, Base, TextureStateCount);
+		if (!SwitchNode ||
+			MIDVariables.Num() == 0 ||
+			MIDVariables.Num() != MaterialElementIndices.Num() ||
+			TextureStatesByMaterial.Num() != MIDVariables.Num() ||
+			TextureStateCount < 2)
 		{
 			return nullptr;
+		}
+		for (const TArray<UTexture*>& TextureStates : TextureStatesByMaterial)
+		{
+			if (TextureStates.Num() != TextureStateCount)
+			{
+				return nullptr;
+			}
 		}
 
 		AddNodeToList(OutNodes, SwitchNode);
@@ -1308,7 +1330,7 @@ namespace HTToggleGenerator
 				Graph,
 				MIDVariables[MaterialIndex],
 				nullptr,
-				Base + FVector2D(1000 + MaterialIndex * 520, Textures.Num() * 360 + 120));
+				Base + FVector2D(1000 + MaterialIndex * 520, TextureStateCount * 360 + 120));
 			if (!GetMID)
 			{
 				return nullptr;
@@ -1318,7 +1340,7 @@ namespace HTToggleGenerator
 		}
 
 		UEdGraphPin* LastExecOut = nullptr;
-		for (int32 TextureIndex = 0; TextureIndex < Textures.Num(); ++TextureIndex)
+		for (int32 TextureIndex = 0; TextureIndex < TextureStateCount; ++TextureIndex)
 		{
 			UEdGraphPin* StateExec = FindPin(SwitchNode, FName(*FString::FromInt(TextureIndex)), EGPD_Output);
 			UK2Node_ExecutionSequence* Sequence = nullptr;
@@ -1348,7 +1370,7 @@ namespace HTToggleGenerator
 
 				AddNodeToList(OutNodes, SetTexture);
 				SetDefaultValue(FindAnyPin(SetTexture, TEXT("ParameterName")), Params.TextureParameterName);
-				SetDefaultObject(FindAnyPin(SetTexture, TEXT("Value")), Textures[TextureIndex]);
+				SetDefaultObject(FindAnyPin(SetTexture, TEXT("Value")), TextureStatesByMaterial[MaterialIndex][TextureIndex]);
 				UEdGraphPin* SetTextureExec = GetSchema()->FindExecutionPin(*SetTexture, EGPD_Input);
 				if (Sequence)
 				{
@@ -1451,7 +1473,7 @@ namespace HTToggleGenerator
 		UEdGraph* Graph,
 		const FHTBlueprintToggleGeneratorParams& Params,
 		const TArray<FName>& MIDVariables,
-		const TArray<UTexture*>& Textures,
+		const TArray<TArray<UTexture*>>& TextureStatesByMaterial,
 		const TArray<UMaterialInterface*>& Materials,
 		UEdGraphPin* ExecIn,
 		UEdGraphPin* ValuePin,
@@ -1461,7 +1483,7 @@ namespace HTToggleGenerator
 	{
 		if (Params.Mode == EHTBlueprintToggleMode::Texture)
 		{
-			return AddApplyTextureNodes(Graph, Params, MIDVariables, Textures, ExecIn, ValuePin, Base, Result, OutNodes);
+			return AddApplyTextureNodes(Graph, Params, MIDVariables, TextureStatesByMaterial, ExecIn, ValuePin, Base, Result, OutNodes);
 		}
 		if (Params.Mode == EHTBlueprintToggleMode::MaterialInterface)
 		{
@@ -1480,7 +1502,7 @@ namespace HTToggleGenerator
 		const FString& SlotName,
 		const FHTBlueprintToggleGeneratorParams& Params,
 		const TArray<UMaterialInterface*>& TextureSourceMaterials,
-		const TArray<UTexture*>& Textures,
+		const TArray<TArray<UTexture*>>& TextureStatesByMaterial,
 		const TArray<UMaterialInterface*>& Materials,
 		const int32 BaseY,
 		FHTBlueprintToggleGeneratorResult& Result)
@@ -1575,7 +1597,7 @@ namespace HTToggleGenerator
 
 		TArray<UEdGraphNode*> MaterialNodes;
 		UEdGraphPin* SetAnimThen = GetSchema()->FindExecutionPin(*SetAnimValue, EGPD_Output);
-		AddApplyToggleNodes(Graph, Params, MIDVariables, Textures, Materials, SetAnimThen, FindSetOutputPin(SetAnimValue), FVector2D(1040 + FlowOffsetX, TrueY), Result, &MaterialNodes);
+		AddApplyToggleNodes(Graph, Params, MIDVariables, TextureStatesByMaterial, Materials, SetAnimThen, FindSetOutputPin(SetAnimValue), FVector2D(1040 + FlowOffsetX, TrueY), Result, &MaterialNodes);
 
 		Connect(FindAnyPin(Branch, UEdGraphSchema_K2::PN_Else), GetSchema()->FindExecutionPin(*CreateSave, EGPD_Input), Result, TEXT("Init false -> CreateSaveGame"));
 		Connect(GetSchema()->FindExecutionPin(*CreateSave, EGPD_Output), GetSchema()->FindExecutionPin(*SetSaveDefault, EGPD_Input), Result, TEXT("CreateSave -> Set Save default"));
@@ -1583,7 +1605,7 @@ namespace HTToggleGenerator
 		Connect(FindAnyPin(GetAnimDefault, ToggleVariable), FindAnyPin(SetSaveDefault, SaveVariable), Result, TEXT("Anim default -> Save default"));
 		Connect(GetSchema()->FindExecutionPin(*SetSaveDefault, EGPD_Output), GetSchema()->FindExecutionPin(*SaveDefaultSlot, EGPD_Input), Result, TEXT("Set Save default -> SaveGameToSlot"));
 		Connect(FindAnyPin(CreateSave, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SaveDefaultSlot, TEXT("SaveGameObject")), Result, TEXT("CreateSave Return -> SaveGameToSlot"));
-		const int32 AssetStateCount = Params.Mode == EHTBlueprintToggleMode::Texture ? Textures.Num() : Materials.Num();
+		const int32 AssetStateCount = Params.Mode == EHTBlueprintToggleMode::Texture ? GetCycleStateCount(Params) : Materials.Num();
 		const float CommentHeight = Params.Mode == EHTBlueprintToggleMode::Texture || Params.Mode == EHTBlueprintToggleMode::MaterialInterface
 			? FMath::Max(1800.0f, 1000.0f + AssetStateCount * 360.0f)
 			: 1800.0f;
@@ -1607,7 +1629,7 @@ namespace HTToggleGenerator
 		const TArray<FName>& MIDVariables,
 		const FString& SlotName,
 		const FHTBlueprintToggleGeneratorParams& Params,
-		const TArray<UTexture*>& Textures,
+		const TArray<TArray<UTexture*>>& TextureStatesByMaterial,
 		const TArray<UMaterialInterface*>& Materials,
 		const int32 BaseY,
 		FHTBlueprintToggleGeneratorResult& Result)
@@ -1722,9 +1744,9 @@ namespace HTToggleGenerator
 
 		TArray<UEdGraphNode*> MaterialNodes;
 		UEdGraphPin* SaveThen = GetSchema()->FindExecutionPin(*SaveSlot, EGPD_Output);
-		AddApplyToggleNodes(Graph, Params, MIDVariables, Textures, Materials, SaveThen, FindSetOutputPin(SetAnimValue), FVector2D(2900, BaseY), Result, &MaterialNodes);
+		AddApplyToggleNodes(Graph, Params, MIDVariables, TextureStatesByMaterial, Materials, SaveThen, FindSetOutputPin(SetAnimValue), FVector2D(2900, BaseY), Result, &MaterialNodes);
 
-		const int32 AssetStateCount = Params.Mode == EHTBlueprintToggleMode::Texture ? Textures.Num() : Materials.Num();
+		const int32 AssetStateCount = Params.Mode == EHTBlueprintToggleMode::Texture ? GetCycleStateCount(Params) : Materials.Num();
 		const float CommentHeight = Params.Mode == EHTBlueprintToggleMode::Texture || Params.Mode == EHTBlueprintToggleMode::MaterialInterface
 			? FMath::Max(1800.0f, 900.0f + AssetStateCount * 360.0f)
 			: 1800.0f;
@@ -1812,7 +1834,7 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 	}
 
 	TArray<UMaterialInterface*> TextureSourceMaterials;
-	TArray<UTexture*> Textures;
+	TArray<TArray<UTexture*>> TextureStatesByMaterial;
 	TArray<UMaterialInterface*> MaterialInterfaces;
 	if (Params.Mode == EHTBlueprintToggleMode::Texture)
 	{
@@ -1839,19 +1861,15 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 			Result.Errors.Add(TEXT("Texture Parameter cannot be empty."));
 			return Result;
 		}
-		if (Params.TexturePaths.Num() < 2)
-		{
-			Result.Errors.Add(TEXT("Texture switch mode requires at least two textures."));
-			return Result;
-		}
-
 		TMap<int32, UMaterialInterface*> SourceMaterialByElementIndex;
+		TMap<int32, TArray<UTexture*>> TexturesByElementIndex;
 		const TArray<FHTTextureMaterialSlotGroup> TextureMaterialSlotGroups = GetTextureMaterialSlotGroups(Params);
 		if (TextureMaterialSlotGroups.Num() == 0)
 		{
 			Result.Errors.Add(TEXT("Texture switch mode requires at least one Source Material group."));
 			return Result;
 		}
+		int32 TextureStateCount = INDEX_NONE;
 		for (const FHTTextureMaterialSlotGroup& Group : TextureMaterialSlotGroups)
 		{
 			if (Trimmed(Group.SourceMaterialPath).IsEmpty())
@@ -1871,6 +1889,36 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 				return Result;
 			}
 
+			if (Group.TexturePaths.Num() < 2)
+			{
+				Result.Errors.Add(TEXT("Every texture material group needs at least two textures."));
+				return Result;
+			}
+			if (TextureStateCount == INDEX_NONE)
+			{
+				TextureStateCount = Group.TexturePaths.Num();
+			}
+			else if (Group.TexturePaths.Num() != TextureStateCount)
+			{
+				Result.Errors.Add(TEXT("All texture material groups must have the same number of texture states."));
+				return Result;
+			}
+
+			TArray<UTexture*> GroupTextures;
+			GroupTextures.Reserve(Group.TexturePaths.Num());
+			for (int32 TextureIndex = 0; TextureIndex < Group.TexturePaths.Num(); ++TextureIndex)
+			{
+				UTexture* Texture = LoadTexture(
+					Group.TexturePaths[TextureIndex],
+					Result,
+					FString::Printf(TEXT("Material Group texture %d"), TextureIndex + 1));
+				if (!Texture)
+				{
+					return Result;
+				}
+				GroupTextures.Add(Texture);
+			}
+
 			for (const int32 MaterialElementIndex : Group.MaterialElementIndices)
 			{
 				if (SourceMaterialByElementIndex.Contains(MaterialElementIndex))
@@ -1879,6 +1927,7 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 					return Result;
 				}
 				SourceMaterialByElementIndex.Add(MaterialElementIndex, GroupSourceMaterial);
+				TexturesByElementIndex.Add(MaterialElementIndex, GroupTextures);
 			}
 		}
 
@@ -1891,20 +1940,16 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 				return Result;
 			}
 			TextureSourceMaterials.Add(*SourceMaterialForElement);
-		}
 
-		for (int32 TextureIndex = 0; TextureIndex < Params.TexturePaths.Num(); ++TextureIndex)
-		{
-			UTexture* Texture = LoadTexture(
-				Params.TexturePaths[TextureIndex],
-				Result,
-				FString::Printf(TEXT("Texture %d"), TextureIndex + 1));
-			if (Texture)
+			TArray<UTexture*>* TexturesForElement = TexturesByElementIndex.Find(MaterialElementIndex);
+			if (!TexturesForElement || TexturesForElement->Num() != TextureStateCount)
 			{
-				Textures.Add(Texture);
+				Result.Errors.Add(FString::Printf(TEXT("Material Slot %d has no texture group."), MaterialElementIndex));
+				return Result;
 			}
+			TextureStatesByMaterial.Add(*TexturesForElement);
 		}
-		if (TextureSourceMaterials.Num() != MaterialElementIndices.Num() || Textures.Num() != Params.TexturePaths.Num())
+		if (TextureSourceMaterials.Num() != MaterialElementIndices.Num() || TextureStatesByMaterial.Num() != MaterialElementIndices.Num())
 		{
 			return Result;
 		}
@@ -1986,10 +2031,10 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 
 	if (Params.bGenerateInitializeGraph)
 	{
-		GenerateInitializeGraph(AnimBlueprint, SaveClass, ToggleVariable, SaveVariable, MIDVariables, SlotName, Params, TextureSourceMaterials, Textures, MaterialInterfaces, NextLayoutBaseY, Result);
+		GenerateInitializeGraph(AnimBlueprint, SaveClass, ToggleVariable, SaveVariable, MIDVariables, SlotName, Params, TextureSourceMaterials, TextureStatesByMaterial, MaterialInterfaces, NextLayoutBaseY, Result);
 		if (Params.Mode == EHTBlueprintToggleMode::Texture)
 		{
-			NextLayoutBaseY += FMath::Max(1600, 1200 + Textures.Num() * 360 + MaterialElementIndices.Num() * 100);
+			NextLayoutBaseY += FMath::Max(1600, 1200 + GetCycleStateCount(Params) * 360 + MaterialElementIndices.Num() * 100);
 		}
 		else if (Params.Mode == EHTBlueprintToggleMode::MaterialInterface)
 		{
@@ -2003,7 +2048,7 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 
 	if (Params.bGenerateUpdateGraph)
 	{
-		GenerateUpdateGraph(AnimBlueprint, SaveClass, ToggleVariable, SaveVariable, MIDVariables, SlotName, Params, Textures, MaterialInterfaces, NextLayoutBaseY, Result);
+		GenerateUpdateGraph(AnimBlueprint, SaveClass, ToggleVariable, SaveVariable, MIDVariables, SlotName, Params, TextureStatesByMaterial, MaterialInterfaces, NextLayoutBaseY, Result);
 	}
 
 	FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBlueprint);

@@ -13,6 +13,7 @@ struct FHTTextureMaterialSlotGroup
 {
 	FString SourceMaterialPath;
 	TArray<int32> MaterialElementIndices;
+	TArray<FString> TexturePaths;
 };
 
 struct FHTBlueprintToggleGeneratorParams

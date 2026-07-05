@@ -398,10 +398,9 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 		CharacterFolderPath = InferCharacterFolderFromAnimBlueprint();
 		SaveBlueprintSettings();
 	}
-	TexturePaths.SetNum(2);
 	MaterialInterfacePaths.SetNum(2);
 	TextureMaterialGroups.Reset();
-	TextureMaterialGroups.AddDefaulted();
+	EnsureTextureGroupDefaults(TextureMaterialGroups.AddDefaulted_GetRef());
 
 	ChildSlot
 	[
@@ -649,18 +648,6 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						.AutoHeight()
 						.Padding(0, 0, 0, 6)
 						[
-							MakeTextureMaterialGroupsHeaderRow()
-						]
-						+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 0, 0, 8)
-						[
-							SAssignNew(TextureMaterialGroupRowsBox, SVerticalBox)
-						]
-						+ SVerticalBox::Slot()
-						.AutoHeight()
-						.Padding(0, 0, 0, 6)
-						[
 							MakeTextRow(
 								LOCTEXT("TextureParameter", "Texture Parameter"),
 								SAssignNew(TextureParameterBox, SEditableTextBox)
@@ -671,40 +658,13 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						.AutoHeight()
 						.Padding(0, 0, 0, 6)
 						[
-							SNew(SHorizontalBox)
-							+ SHorizontalBox::Slot()
-							.AutoWidth()
-							[
-								SNew(SBox).WidthOverride(150)
-							]
-							+ SHorizontalBox::Slot()
-							.AutoWidth()
-							[
-								SNew(SButton)
-								.ToolTipText(LOCTEXT("AddTextureTooltip", "Add another texture state."))
-								.OnClicked(this, &SHTBlueprintToggleToolPanel::OnAddTextureClicked)
-								[
-									SNew(SHorizontalBox)
-									+ SHorizontalBox::Slot()
-									.AutoWidth()
-									.VAlign(VAlign_Center)
-									.Padding(0, 0, 4, 0)
-									[
-										SNew(SImage).Image(FAppStyle::GetBrush("Icons.Plus"))
-									]
-									+ SHorizontalBox::Slot()
-									.AutoWidth()
-									.VAlign(VAlign_Center)
-									[
-										SNew(STextBlock).Text(LOCTEXT("AddTexture", "Add texture"))
-									]
-								]
-							]
+							MakeTextureMaterialGroupsHeaderRow()
 						]
 						+ SVerticalBox::Slot()
 						.AutoHeight()
+						.Padding(0, 0, 0, 8)
 						[
-							SAssignNew(TextureRowsBox, SVerticalBox)
+							SAssignNew(TextureMaterialGroupRowsBox, SVerticalBox)
 						]
 					]
 
@@ -831,7 +791,6 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 
 	UpdateAssetSummaryText();
 	RebuildTextureMaterialGroupRows();
-	RebuildTextureRows();
 	RebuildMaterialInterfaceRows();
 }
 
@@ -1035,10 +994,22 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTextureMaterialGroupsHeader
 
 TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTextureMaterialGroupRow(const int32 GroupIndex)
 {
+	EnsureTextureGroupDefaults(TextureMaterialGroups[GroupIndex]);
 	TSharedRef<SEditableTextBox> SlotsTextBox = SNew(SEditableTextBox)
 		.Text(FText::FromString(TextureMaterialGroups[GroupIndex].SlotList.IsEmpty() ? FString(TEXT("0")) : TextureMaterialGroups[GroupIndex].SlotList))
 		.HintText(LOCTEXT("TextureGroupSlotsHint", "Single: 12    Multiple: 12,13"));
 	TextureMaterialGroups[GroupIndex].SlotsBox = SlotsTextBox;
+
+	TSharedRef<SVerticalBox> GroupTextureRows = SNew(SVerticalBox);
+	for (int32 TextureIndex = 0; TextureIndex < TextureMaterialGroups[GroupIndex].TexturePaths.Num(); ++TextureIndex)
+	{
+		GroupTextureRows->AddSlot()
+		.AutoHeight()
+		.Padding(0, 0, 0, 6)
+		[
+			MakeTexturePickerRow(GroupIndex, TextureIndex)
+		];
+	}
 
 	return SNew(SBorder)
 		.Padding(8)
@@ -1093,6 +1064,7 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTextureMaterialGroupRow(con
 			]
 			+ SVerticalBox::Slot()
 			.AutoHeight()
+			.Padding(0, 0, 0, 6)
 			[
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot()
@@ -1118,6 +1090,35 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTextureMaterialGroupRow(con
 					})
 					.OnObjectChanged(this, &SHTBlueprintToggleToolPanel::OnTextureGroupSourceMaterialChanged, GroupIndex)
 				]
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(130, 0, 0, 6)
+			[
+				SNew(SButton)
+				.ToolTipText(LOCTEXT("AddGroupTextureTooltip", "Add another texture state for this material group. All material groups must have the same number of texture states before generation."))
+				.OnClicked(this, &SHTBlueprintToggleToolPanel::OnAddTextureClicked, GroupIndex)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(0, 0, 4, 0)
+					[
+						SNew(SImage).Image(FAppStyle::GetBrush("Icons.Plus"))
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					[
+						SNew(STextBlock).Text(LOCTEXT("AddGroupTexture", "Add texture state"))
+					]
+				]
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			[
+				GroupTextureRows
 			]
 		];
 }
@@ -1276,6 +1277,7 @@ FReply SHTBlueprintToggleToolPanel::OnAnalyzeMaterialsClicked()
 	}
 
 	MaterialGroupRenderedThumbnails.Reset();
+	MaterialAnalysisFeedbackText.Reset();
 	TSharedRef<SVerticalBox> GroupList = SNew(SVerticalBox);
 	for (int32 GroupIndex = 0; GroupIndex < MaterialSlotGroups.Num(); ++GroupIndex)
 	{
@@ -1327,11 +1329,20 @@ FReply SHTBlueprintToggleToolPanel::OnAnalyzeMaterialsClicked()
 					GroupList
 				]
 			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(0, 10, 0, 0)
+			[
+				SAssignNew(MaterialAnalysisFeedbackText, STextBlock)
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				.AutoWrapText(true)
+			]
 		]);
 
 	FSlateApplication::Get().AddModalWindow(Window, SharedThis(this));
 	MaterialAnalysisWindow.Reset();
 	MaterialGroupRenderedThumbnails.Reset();
+	MaterialAnalysisFeedbackText.Reset();
 	return FReply::Handled();
 }
 
@@ -1374,6 +1385,9 @@ FReply SHTBlueprintToggleToolPanel::OnSelectMaterialGroupClicked(const int32 Gro
 		if (ExistingIndex == INDEX_NONE)
 		{
 			ExistingIndex = EmptyIndex == INDEX_NONE ? TextureMaterialGroups.AddDefaulted() : EmptyIndex;
+			EnsureTextureGroupDefaults(TextureMaterialGroups[ExistingIndex]);
+			const int32 DesiredTextureCount = TextureMaterialGroups.Num() > 0 ? FMath::Max(2, TextureMaterialGroups[0].TexturePaths.Num()) : 2;
+			TextureMaterialGroups[ExistingIndex].TexturePaths.SetNum(DesiredTextureCount);
 			TextureMaterialGroups[ExistingIndex].SourceMaterialPath = MaterialPath;
 		}
 
@@ -1392,12 +1406,24 @@ FReply SHTBlueprintToggleToolPanel::OnSelectMaterialGroupClicked(const int32 Gro
 		SourceMaterialPath = MaterialPath;
 		RebuildTextureMaterialGroupRows();
 
+		const FText AddedText = FText::Format(
+			LOCTEXT("TextureMaterialGroupAdded", "Added material group {0}; slots: {1}. Choose this group's textures in the main panel."),
+			FText::FromString(Material->GetName()),
+			FText::FromString(HTTogglePanel::JoinSlotIndices(Group.SlotIndices)));
+		if (MaterialAnalysisFeedbackText.IsValid())
+		{
+			MaterialAnalysisFeedbackText->SetText(AddedText);
+		}
 		if (StatusText.IsValid())
 		{
-			StatusText->SetText(FText::Format(
-				LOCTEXT("TextureMaterialGroupAdded", "Added material group {0}; slots: {1}"),
-				FText::FromString(Material->GetName()),
-				FText::FromString(HTTogglePanel::JoinSlotIndices(Group.SlotIndices))));
+			StatusText->SetText(AddedText);
+		}
+		FNotificationInfo Info(AddedText);
+		Info.ExpireDuration = 2.0f;
+		TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info);
+		if (Notification.IsValid())
+		{
+			Notification->SetCompletionState(SNotificationItem::CS_Success);
 		}
 		return FReply::Handled();
 	}
@@ -1453,7 +1479,7 @@ void SHTBlueprintToggleToolPanel::RebuildTextureMaterialGroupRows()
 	}
 }
 
-TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTexturePickerRow(int32 TextureIndex)
+TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTexturePickerRow(const int32 GroupIndex, const int32 TextureIndex)
 {
 	return SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot()
@@ -1461,7 +1487,7 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTexturePickerRow(int32 Text
 		.VAlign(VAlign_Center)
 		[
 			SNew(SBox)
-			.WidthOverride(150)
+			.WidthOverride(130)
 			[
 				SNew(STextBlock)
 				.Text(FText::Format(LOCTEXT("TextureStateLabel", "Texture {0} (State {1})"), FText::AsNumber(TextureIndex + 1), FText::AsNumber(TextureIndex)))
@@ -1475,13 +1501,15 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTexturePickerRow(int32 Text
 			.AllowClear(false)
 			.DisplayThumbnail(true)
 			.OnShouldFilterAsset(this, &SHTBlueprintToggleToolPanel::ShouldFilterTextureAsset)
-			.ObjectPath(TAttribute<FString>::CreateLambda([this, TextureIndex]()
+			.ObjectPath(TAttribute<FString>::CreateLambda([this, GroupIndex, TextureIndex]()
 			{
-				return TexturePaths.IsValidIndex(TextureIndex) ? TexturePaths[TextureIndex] : FString();
+				return TextureMaterialGroups.IsValidIndex(GroupIndex) && TextureMaterialGroups[GroupIndex].TexturePaths.IsValidIndex(TextureIndex)
+					? TextureMaterialGroups[GroupIndex].TexturePaths[TextureIndex]
+					: FString();
 			}))
-			.OnObjectChanged(FOnSetObject::CreateLambda([this, TextureIndex](const FAssetData& AssetData)
+			.OnObjectChanged(FOnSetObject::CreateLambda([this, GroupIndex, TextureIndex](const FAssetData& AssetData)
 			{
-				OnTextureChanged(AssetData, TextureIndex);
+				OnTextureChanged(AssetData, GroupIndex, TextureIndex);
 			}))
 		]
 		+ SHorizontalBox::Slot()
@@ -1490,32 +1518,13 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTexturePickerRow(int32 Text
 		[
 			SNew(SButton)
 			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
-			.Visibility_Lambda([this]() { return TexturePaths.Num() > 2 ? EVisibility::Visible : EVisibility::Collapsed; })
+			.Visibility_Lambda([this, GroupIndex]() { return TextureMaterialGroups.IsValidIndex(GroupIndex) && TextureMaterialGroups[GroupIndex].TexturePaths.Num() > 2 ? EVisibility::Visible : EVisibility::Collapsed; })
 			.ToolTipText(LOCTEXT("RemoveTextureTooltip", "Remove this texture state."))
-			.OnClicked(this, &SHTBlueprintToggleToolPanel::OnRemoveTextureClicked, TextureIndex)
+			.OnClicked(this, &SHTBlueprintToggleToolPanel::OnRemoveTextureClicked, GroupIndex, TextureIndex)
 			[
 				SNew(SImage).Image(FAppStyle::GetBrush("Icons.Delete"))
 			]
 		];
-}
-
-void SHTBlueprintToggleToolPanel::RebuildTextureRows()
-{
-	if (!TextureRowsBox.IsValid())
-	{
-		return;
-	}
-
-	TextureRowsBox->ClearChildren();
-	for (int32 TextureIndex = 0; TextureIndex < TexturePaths.Num(); ++TextureIndex)
-	{
-		TextureRowsBox->AddSlot()
-		.AutoHeight()
-		.Padding(0, 0, 0, 6)
-		[
-			MakeTexturePickerRow(TextureIndex)
-		];
-	}
 }
 
 TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialInterfacePickerRow(int32 MaterialIndex)
@@ -1583,17 +1592,32 @@ void SHTBlueprintToggleToolPanel::RebuildMaterialInterfaceRows()
 	}
 }
 
-FReply SHTBlueprintToggleToolPanel::OnAddTextureClicked()
+void SHTBlueprintToggleToolPanel::EnsureTextureGroupDefaults(FTextureMaterialGroupInput& Group) const
 {
-	TexturePaths.AddDefaulted();
-	RebuildTextureRows();
+	while (Group.TexturePaths.Num() < 2)
+	{
+		Group.TexturePaths.AddDefaulted();
+	}
+}
+
+FReply SHTBlueprintToggleToolPanel::OnAddTextureClicked(const int32 GroupIndex)
+{
+	CaptureTextureMaterialGroupRows();
+	if (TextureMaterialGroups.IsValidIndex(GroupIndex))
+	{
+		TextureMaterialGroups[GroupIndex].TexturePaths.AddDefaulted();
+		RebuildTextureMaterialGroupRows();
+	}
 	return FReply::Handled();
 }
 
 FReply SHTBlueprintToggleToolPanel::OnAddTextureMaterialGroupClicked()
 {
 	CaptureTextureMaterialGroupRows();
-	TextureMaterialGroups.AddDefaulted();
+	const int32 DesiredTextureCount = TextureMaterialGroups.Num() > 0 ? FMath::Max(2, TextureMaterialGroups[0].TexturePaths.Num()) : 2;
+	FTextureMaterialGroupInput& NewGroup = TextureMaterialGroups.AddDefaulted_GetRef();
+	EnsureTextureGroupDefaults(NewGroup);
+	NewGroup.TexturePaths.SetNum(DesiredTextureCount);
 	RebuildTextureMaterialGroupRows();
 	return FReply::Handled();
 }
@@ -1609,12 +1633,15 @@ FReply SHTBlueprintToggleToolPanel::OnRemoveTextureMaterialGroupClicked(const in
 	return FReply::Handled();
 }
 
-FReply SHTBlueprintToggleToolPanel::OnRemoveTextureClicked(int32 TextureIndex)
+FReply SHTBlueprintToggleToolPanel::OnRemoveTextureClicked(const int32 GroupIndex, const int32 TextureIndex)
 {
-	if (TexturePaths.Num() > 2 && TexturePaths.IsValidIndex(TextureIndex))
+	CaptureTextureMaterialGroupRows();
+	if (TextureMaterialGroups.IsValidIndex(GroupIndex) &&
+		TextureMaterialGroups[GroupIndex].TexturePaths.Num() > 2 &&
+		TextureMaterialGroups[GroupIndex].TexturePaths.IsValidIndex(TextureIndex))
 	{
-		TexturePaths.RemoveAt(TextureIndex);
-		RebuildTextureRows();
+		TextureMaterialGroups[GroupIndex].TexturePaths.RemoveAt(TextureIndex);
+		RebuildTextureMaterialGroupRows();
 	}
 	return FReply::Handled();
 }
@@ -2176,16 +2203,18 @@ void SHTBlueprintToggleToolPanel::OnTextureGroupSourceMaterialChanged(const FAss
 	}
 }
 
-void SHTBlueprintToggleToolPanel::OnTextureChanged(const FAssetData& AssetData, int32 TextureIndex)
+void SHTBlueprintToggleToolPanel::OnTextureChanged(const FAssetData& AssetData, const int32 GroupIndex, const int32 TextureIndex)
 {
-	if (AssetData.IsValid() && TexturePaths.IsValidIndex(TextureIndex))
+	if (AssetData.IsValid() &&
+		TextureMaterialGroups.IsValidIndex(GroupIndex) &&
+		TextureMaterialGroups[GroupIndex].TexturePaths.IsValidIndex(TextureIndex))
 	{
 		if (ShouldFilterTextureAsset(AssetData))
 		{
 			ShowPanelError(LOCTEXT("TextureOutsideCharacterFolder", "Choose a texture inside the selected Character Folder."));
 			return;
 		}
-		TexturePaths[TextureIndex] = AssetData.GetSoftObjectPath().ToString();
+		TextureMaterialGroups[GroupIndex].TexturePaths[TextureIndex] = AssetData.GetSoftObjectPath().ToString();
 	}
 }
 
@@ -2506,6 +2535,7 @@ bool SHTBlueprintToggleToolPanel::ParseTextureMaterialGroups(TArray<FHTTextureMa
 		FHTTextureMaterialSlotGroup& OutputGroup = OutGroups.AddDefaulted_GetRef();
 		OutputGroup.SourceMaterialPath = InputGroup.SourceMaterialPath;
 		OutputGroup.SourceMaterialPath.TrimStartAndEndInline();
+		OutputGroup.TexturePaths = InputGroup.TexturePaths;
 
 		if (OutputGroup.SourceMaterialPath.IsEmpty())
 		{
@@ -2529,6 +2559,24 @@ bool SHTBlueprintToggleToolPanel::ParseTextureMaterialGroups(TArray<FHTTextureMa
 			}
 			UsedSlots.Add(SlotIndex);
 		}
+
+		for (FString& TexturePath : OutputGroup.TexturePaths)
+		{
+			TexturePath.TrimStartAndEndInline();
+		}
+		if (OutputGroup.TexturePaths.Num() < 2)
+		{
+			OutError = FString::Printf(TEXT("Material Group %d needs at least two textures."), GroupIndex + 1);
+			return false;
+		}
+		for (int32 TextureIndex = 0; TextureIndex < OutputGroup.TexturePaths.Num(); ++TextureIndex)
+		{
+			if (OutputGroup.TexturePaths[TextureIndex].IsEmpty())
+			{
+				OutError = FString::Printf(TEXT("Material Group %d: choose Texture %d."), GroupIndex + 1, TextureIndex + 1);
+				return false;
+			}
+		}
 	}
 
 	OutGroups.RemoveAll([](const FHTTextureMaterialSlotGroup& Group)
@@ -2540,6 +2588,20 @@ bool SHTBlueprintToggleToolPanel::ParseTextureMaterialGroups(TArray<FHTTextureMa
 	{
 		OutError = TEXT("Add at least one Source Material and Material Slot(s) group.");
 		return false;
+	}
+
+	const int32 ExpectedTextureCount = OutGroups[0].TexturePaths.Num();
+	for (int32 GroupIndex = 1; GroupIndex < OutGroups.Num(); ++GroupIndex)
+	{
+		if (OutGroups[GroupIndex].TexturePaths.Num() != ExpectedTextureCount)
+		{
+			OutError = FString::Printf(
+				TEXT("Material Group %d has %d textures, but Material Group 1 has %d. All groups must have the same number of texture states."),
+				GroupIndex + 1,
+				OutGroups[GroupIndex].TexturePaths.Num(),
+				ExpectedTextureCount);
+			return false;
+		}
 	}
 
 	return true;
@@ -2621,19 +2683,6 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 			ShowPanelError(LOCTEXT("MissingTextureParameter", "Choose a Texture Parameter name, for example BaseColor."));
 			return FReply::Handled();
 		}
-		if (TexturePaths.Num() < 2)
-		{
-			ShowPanelError(LOCTEXT("TooFewTextures", "Texture switch mode requires at least two textures."));
-			return FReply::Handled();
-		}
-		for (int32 TextureIndex = 0; TextureIndex < TexturePaths.Num(); ++TextureIndex)
-		{
-			if (TexturePaths[TextureIndex].IsEmpty())
-			{
-				ShowPanelError(FText::Format(LOCTEXT("MissingTextureAtIndex", "Choose Texture {0}."), FText::AsNumber(TextureIndex + 1)));
-				return FReply::Handled();
-			}
-		}
 	}
 	else if (ToggleMode == EHTBlueprintToggleMode::MaterialInterface)
 	{
@@ -2678,7 +2727,7 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	Params.SourceMaterialPath = TextureMaterialGroupsForGeneration.Num() > 0 ? TextureMaterialGroupsForGeneration[0].SourceMaterialPath : SourceMaterialPath;
 	Params.TextureMaterialSlotGroups = TextureMaterialGroupsForGeneration;
 	Params.TextureParameterName = TextBoxString(TextureParameterBox).TrimStartAndEnd();
-	Params.TexturePaths = TexturePaths;
+	Params.TexturePaths = TextureMaterialGroupsForGeneration.Num() > 0 ? TextureMaterialGroupsForGeneration[0].TexturePaths : TArray<FString>();
 	Params.MaterialInterfacePaths = MaterialInterfacePaths;
 	Params.bGenerateInitializeGraph = IsChecked(InitGraphCheckBox);
 	Params.bGenerateUpdateGraph = IsChecked(UpdateGraphCheckBox);
