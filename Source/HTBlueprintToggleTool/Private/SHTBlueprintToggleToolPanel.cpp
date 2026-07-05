@@ -647,7 +647,7 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						.AutoHeight()
 						.Padding(0, 0, 0, 6)
 						[
-							MakeMaterialSlotsRow()
+							MakeMaterialSlotsRow(TextureMaterialSlotsBox)
 						]
 						+ SVerticalBox::Slot()
 						.AutoHeight()
@@ -713,7 +713,7 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						.AutoHeight()
 						.Padding(0, 0, 0, 6)
 						[
-							MakeMaterialSlotsRow()
+							MakeMaterialSlotsRow(MaterialInterfaceSlotsBox)
 						]
 						+ SVerticalBox::Slot()
 						.AutoHeight()
@@ -922,7 +922,7 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeCharacterFolderPickerRow()
 		];
 }
 
-TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialSlotsRow()
+TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialSlotsRow(TSharedPtr<SEditableTextBox>& OutMaterialSlotsBox)
 {
 	return SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot()
@@ -938,7 +938,7 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialSlotsRow()
 		+ SHorizontalBox::Slot()
 		.FillWidth(1.0f)
 		[
-			SAssignNew(MaterialSlotsBox, SEditableTextBox)
+			SAssignNew(OutMaterialSlotsBox, SEditableTextBox)
 			.Text(FText::FromString(TEXT("0")))
 			.HintText(LOCTEXT("MaterialElementIndicesHint", "Single: 12    Multiple: 12,13"))
 		]
@@ -1181,7 +1181,8 @@ FReply SHTBlueprintToggleToolPanel::OnAnalyzeMaterialsClicked()
 
 FReply SHTBlueprintToggleToolPanel::OnSelectMaterialGroupClicked(const int32 GroupIndex)
 {
-	if (!MaterialSlotGroups.IsValidIndex(GroupIndex) || !MaterialSlotsBox.IsValid())
+	const TSharedPtr<SEditableTextBox> ActiveMaterialSlotsBox = GetActiveMaterialSlotsBox();
+	if (!MaterialSlotGroups.IsValidIndex(GroupIndex) || !ActiveMaterialSlotsBox.IsValid())
 	{
 		return FReply::Handled();
 	}
@@ -1195,7 +1196,7 @@ FReply SHTBlueprintToggleToolPanel::OnSelectMaterialGroupClicked(const int32 Gro
 	}
 
 	const FString SlotList = HTTogglePanel::JoinSlotIndices(Group.SlotIndices);
-	MaterialSlotsBox->SetText(FText::FromString(SlotList));
+	ActiveMaterialSlotsBox->SetText(FText::FromString(SlotList));
 	SourceMaterialPath = Material->GetPathName();
 	if (StatusText.IsValid())
 	{
@@ -2175,7 +2176,7 @@ bool SHTBlueprintToggleToolPanel::ParseTextureMaterialSlots(TArray<int32>& OutMa
 {
 	OutMaterialSlots.Reset();
 
-	FString RawValue = HTTogglePanel::TextBoxString(MaterialSlotsBox);
+	FString RawValue = HTTogglePanel::TextBoxString(GetActiveMaterialSlotsBox());
 	RawValue.TrimStartAndEndInline();
 	RawValue.ReplaceInline(TEXT(";"), TEXT(","));
 	RawValue.ReplaceInline(TEXT(" "), TEXT(","));
@@ -2216,6 +2217,16 @@ bool SHTBlueprintToggleToolPanel::ParseTextureMaterialSlots(TArray<int32>& OutMa
 	}
 
 	return true;
+}
+
+TSharedPtr<SEditableTextBox> SHTBlueprintToggleToolPanel::GetActiveMaterialSlotsBox() const
+{
+	if (ToggleMode == EHTBlueprintToggleMode::MaterialInterface)
+	{
+		return MaterialInterfaceSlotsBox;
+	}
+
+	return TextureMaterialSlotsBox;
 }
 
 void SHTBlueprintToggleToolPanel::ShowPanelError(const FText& ErrorText) const

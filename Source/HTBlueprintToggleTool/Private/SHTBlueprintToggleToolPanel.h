@@ -37,7 +37,7 @@ private:
 	TSharedRef<SWidget> MakeTextRow(const FText& Label, const TSharedRef<SEditableTextBox>& TextBox) const;
 	TSharedRef<SWidget> MakeBlueprintPickerRow(const FText& Label, bool bAnimBlueprint);
 	TSharedRef<SWidget> MakeCharacterFolderPickerRow();
-	TSharedRef<SWidget> MakeMaterialSlotsRow();
+	TSharedRef<SWidget> MakeMaterialSlotsRow(TSharedPtr<SEditableTextBox>& OutMaterialSlotsBox);
 	TSharedRef<SWidget> MakeMaterialPickerRow();
 	TSharedRef<SWidget> MakeTexturePickerRow(int32 TextureIndex);
 	TSharedRef<SWidget> MakeMaterialInterfacePickerRow(int32 MaterialIndex);
@@ -53,6 +53,7 @@ private:
 
 	bool ParseMaterialIDs(TArray<int32>& OutMaterialIDs, FString& OutError) const;
 	bool ParseTextureMaterialSlots(TArray<int32>& OutMaterialSlots, FString& OutError) const;
+	TSharedPtr<SEditableTextBox> GetActiveMaterialSlotsBox() const;
 	void ShowPanelError(const FText& ErrorText) const;
 	FString GetAnimBlueprintPath() const;
 	FString GetSaveGameBlueprintPath() const;
@@ -101,7 +102,8 @@ private:
 	TSharedPtr<SEditableTextBox> ToggleVariableBox;
 	TSharedPtr<SEditableTextBox> KeyNameBox;
 	TSharedPtr<SEditableTextBox> MaterialIDsBox;
-	TSharedPtr<SEditableTextBox> MaterialSlotsBox;
+	TSharedPtr<SEditableTextBox> TextureMaterialSlotsBox;
+	TSharedPtr<SEditableTextBox> MaterialInterfaceSlotsBox;
 	TSharedPtr<SEditableTextBox> CharacterFolderBox;
 	TSharedPtr<SEditableTextBox> TextureParameterBox;
 	TSharedPtr<SWidgetSwitcher> ModeOptionsSwitcher;
