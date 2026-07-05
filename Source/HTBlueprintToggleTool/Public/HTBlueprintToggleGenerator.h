@@ -9,6 +9,12 @@ enum class EHTBlueprintToggleMode : uint8
 	MaterialInterface
 };
 
+struct FHTTextureMaterialSlotGroup
+{
+	FString SourceMaterialPath;
+	TArray<int32> MaterialElementIndices;
+};
+
 struct FHTBlueprintToggleGeneratorParams
 {
 	EHTBlueprintToggleMode Mode = EHTBlueprintToggleMode::MaterialSection;
@@ -25,6 +31,7 @@ struct FHTBlueprintToggleGeneratorParams
 	int32 MaterialElementIndex = 0;
 	TArray<int32> MaterialElementIndices;
 	FString SourceMaterialPath;
+	TArray<FHTTextureMaterialSlotGroup> TextureMaterialSlotGroups;
 	FString TextureParameterName;
 	TArray<FString> TexturePaths;
 	TArray<FString> MaterialInterfacePaths;

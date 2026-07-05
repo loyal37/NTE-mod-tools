@@ -38,14 +38,20 @@ private:
 	TSharedRef<SWidget> MakeBlueprintPickerRow(const FText& Label, bool bAnimBlueprint);
 	TSharedRef<SWidget> MakeCharacterFolderPickerRow();
 	TSharedRef<SWidget> MakeMaterialSlotsRow(TSharedPtr<SEditableTextBox>& OutMaterialSlotsBox);
+	TSharedRef<SWidget> MakeTextureMaterialGroupsHeaderRow();
+	TSharedRef<SWidget> MakeTextureMaterialGroupRow(int32 GroupIndex);
 	TSharedRef<SWidget> MakeMaterialPickerRow();
 	TSharedRef<SWidget> MakeTexturePickerRow(int32 TextureIndex);
 	TSharedRef<SWidget> MakeMaterialInterfacePickerRow(int32 MaterialIndex);
 	TSharedRef<SWidget> MakeMaterialGroupRow(int32 GroupIndex);
+	void RebuildTextureMaterialGroupRows();
 	void RebuildTextureRows();
 	void RebuildMaterialInterfaceRows();
+	void CaptureTextureMaterialGroupRows();
 	FReply OnAddTextureClicked();
 	FReply OnRemoveTextureClicked(int32 TextureIndex);
+	FReply OnAddTextureMaterialGroupClicked();
+	FReply OnRemoveTextureMaterialGroupClicked(int32 GroupIndex);
 	FReply OnAddMaterialInterfaceClicked();
 	FReply OnRemoveMaterialInterfaceClicked(int32 MaterialIndex);
 	FReply OnAnalyzeMaterialsClicked();
@@ -53,6 +59,8 @@ private:
 
 	bool ParseMaterialIDs(TArray<int32>& OutMaterialIDs, FString& OutError) const;
 	bool ParseTextureMaterialSlots(TArray<int32>& OutMaterialSlots, FString& OutError) const;
+	bool ParseMaterialSlotsText(const FString& RawValue, TArray<int32>& OutMaterialSlots, FString& OutError) const;
+	bool ParseTextureMaterialGroups(TArray<FHTTextureMaterialSlotGroup>& OutGroups, FString& OutError) const;
 	TSharedPtr<SEditableTextBox> GetActiveMaterialSlotsBox() const;
 	void ShowPanelError(const FText& ErrorText) const;
 	FString GetAnimBlueprintPath() const;
@@ -63,6 +71,7 @@ private:
 	void OnCharacterFolderPicked(const FString& NewPath);
 	bool SyncBlueprintPathsFromCharacterFolder();
 	void OnSourceMaterialChanged(const FAssetData& AssetData);
+	void OnTextureGroupSourceMaterialChanged(const FAssetData& AssetData, int32 GroupIndex);
 	void OnTextureChanged(const FAssetData& AssetData, int32 TextureIndex);
 	void OnMaterialInterfaceChanged(const FAssetData& AssetData, int32 MaterialIndex);
 	bool ShouldFilterTextureAsset(const FAssetData& AssetData) const;
@@ -84,10 +93,18 @@ private:
 		TArray<int32> SlotIndices;
 	};
 
+	struct FTextureMaterialGroupInput
+	{
+		FString SourceMaterialPath;
+		FString SlotList = TEXT("0");
+		TSharedPtr<SEditableTextBox> SlotsBox;
+	};
+
 	FString AnimBlueprintPath;
 	FString SaveGameBlueprintPath;
 	FString CharacterFolderPath;
 	FString SourceMaterialPath;
+	TArray<FTextureMaterialGroupInput> TextureMaterialGroups;
 	TArray<FString> TexturePaths;
 	TArray<FString> MaterialInterfacePaths;
 	EHTBlueprintToggleMode ToggleMode = EHTBlueprintToggleMode::MaterialSection;
@@ -102,11 +119,11 @@ private:
 	TSharedPtr<SEditableTextBox> ToggleVariableBox;
 	TSharedPtr<SEditableTextBox> KeyNameBox;
 	TSharedPtr<SEditableTextBox> MaterialIDsBox;
-	TSharedPtr<SEditableTextBox> TextureMaterialSlotsBox;
 	TSharedPtr<SEditableTextBox> MaterialInterfaceSlotsBox;
 	TSharedPtr<SEditableTextBox> CharacterFolderBox;
 	TSharedPtr<SEditableTextBox> TextureParameterBox;
 	TSharedPtr<SWidgetSwitcher> ModeOptionsSwitcher;
+	TSharedPtr<SVerticalBox> TextureMaterialGroupRowsBox;
 	TSharedPtr<SVerticalBox> TextureRowsBox;
 	TSharedPtr<SVerticalBox> MaterialInterfaceRowsBox;
 	TSharedPtr<SCheckBox> InitGraphCheckBox;
