@@ -637,7 +637,8 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 							MakeTextRow(
 								LOCTEXT("MaterialIDs", "Material ID(s)"),
 								SAssignNew(MaterialIDsBox, SEditableTextBox)
-								.HintText(LOCTEXT("MaterialIDsHint", "Single: 16    Multiple: 13,20")))
+								.HintText(LOCTEXT("MaterialIDsHint", "Single: 16    Cycle: 13,20    Together: 13+20"))
+								.ToolTipText(LOCTEXT("MaterialIDsTooltip", "Use commas to cycle materials. Use + to show or hide multiple materials together.")))
 						]
 					]
 
@@ -2421,28 +2422,51 @@ bool SHTBlueprintToggleToolPanel::SyncBlueprintPathsFromCharacterFolder()
 	return bChanged;
 }
 
-bool SHTBlueprintToggleToolPanel::ParseMaterialIDs(TArray<int32>& OutMaterialIDs, FString& OutError) const
+bool SHTBlueprintToggleToolPanel::ParseMaterialIDs(TArray<int32>& OutMaterialIDs, bool& bOutToggleTogether, FString& OutError) const
 {
 	OutMaterialIDs.Reset();
+	bOutToggleTogether = false;
 
 	FString RawValue = HTTogglePanel::TextBoxString(MaterialIDsBox);
 	RawValue.TrimStartAndEndInline();
-	RawValue.ReplaceInline(TEXT("，"), TEXT(","));
-	RawValue.ReplaceInline(TEXT(";"), TEXT(","));
-	RawValue.ReplaceInline(TEXT("；"), TEXT(","));
-	RawValue.ReplaceInline(TEXT(" "), TEXT(","));
-	RawValue.ReplaceInline(TEXT("\r"), TEXT(","));
-	RawValue.ReplaceInline(TEXT("\n"), TEXT(","));
-	RawValue.ReplaceInline(TEXT("\t"), TEXT(","));
+	RawValue.ReplaceInline(TEXT("\uFF0B"), TEXT("+"));
+	RawValue.ReplaceInline(TEXT("\uFF0C"), TEXT(","));
+	RawValue.ReplaceInline(TEXT("\u3001"), TEXT(","));
+	RawValue.ReplaceInline(TEXT("\uFF1B"), TEXT(";"));
 
 	if (RawValue.IsEmpty())
 	{
-		OutError = TEXT("Enter at least one Material ID. Single example: 16; multiple example: 13,20.");
+		OutError = TEXT("Enter at least one Material ID. Examples: 16, 13,20, or 13+20.");
 		return false;
 	}
 
+	bOutToggleTogether = RawValue.Contains(TEXT("+"));
+	if (bOutToggleTogether && (RawValue.Contains(TEXT(",")) || RawValue.Contains(TEXT(";"))))
+	{
+		OutError = TEXT("Do not mix + with commas. Use 13+20 to hide together, or 13,20 to cycle.");
+		return false;
+	}
+
+	FString Delimiter = TEXT(",");
+	if (bOutToggleTogether)
+	{
+		Delimiter = TEXT("+");
+		RawValue.ReplaceInline(TEXT(" "), TEXT(""));
+		RawValue.ReplaceInline(TEXT("\r"), TEXT(""));
+		RawValue.ReplaceInline(TEXT("\n"), TEXT(""));
+		RawValue.ReplaceInline(TEXT("\t"), TEXT(""));
+	}
+	else
+	{
+		RawValue.ReplaceInline(TEXT(";"), TEXT(","));
+		RawValue.ReplaceInline(TEXT(" "), TEXT(","));
+		RawValue.ReplaceInline(TEXT("\r"), TEXT(","));
+		RawValue.ReplaceInline(TEXT("\n"), TEXT(","));
+		RawValue.ReplaceInline(TEXT("\t"), TEXT(","));
+	}
+
 	TArray<FString> Parts;
-	RawValue.ParseIntoArray(Parts, TEXT(","), true);
+	RawValue.ParseIntoArray(Parts, *Delimiter, true);
 	for (FString Part : Parts)
 	{
 		Part.TrimStartAndEndInline();
@@ -2464,6 +2488,11 @@ bool SHTBlueprintToggleToolPanel::ParseMaterialIDs(TArray<int32>& OutMaterialIDs
 	if (OutMaterialIDs.Num() == 0)
 	{
 		OutError = TEXT("Enter at least one valid Material ID.");
+		return false;
+	}
+	if (bOutToggleTogether && OutMaterialIDs.Num() < 2)
+	{
+		OutError = TEXT("Together mode needs at least two Material IDs, for example 13+20.");
 		return false;
 	}
 
@@ -2647,12 +2676,13 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	}
 
 	TArray<int32> MaterialIDs;
+	bool bToggleMaterialIDsTogether = false;
 	TArray<int32> TextureMaterialSlots;
 	TArray<FHTTextureMaterialSlotGroup> TextureMaterialGroupsForGeneration;
 	if (ToggleMode == EHTBlueprintToggleMode::MaterialSection)
 	{
 		FString MaterialIDError;
-		if (!ParseMaterialIDs(MaterialIDs, MaterialIDError))
+		if (!ParseMaterialIDs(MaterialIDs, bToggleMaterialIDsTogether, MaterialIDError))
 		{
 			ShowPanelError(FText::FromString(MaterialIDError));
 			return FReply::Handled();
@@ -2720,6 +2750,7 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	Params.KeyName = KeyName;
 	Params.MaterialIDs = MaterialIDs;
 	Params.MaterialID = MaterialIDs.Num() > 0 ? MaterialIDs[0] : 0;
+	Params.bToggleMaterialIDsTogether = bToggleMaterialIDsTogether;
 	Params.SectionIndex = 0;
 	Params.LODIndex = 0;
 	Params.MaterialElementIndex = TextureMaterialSlots.Num() > 0 ? TextureMaterialSlots[0] : 0;

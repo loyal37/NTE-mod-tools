@@ -27,6 +27,7 @@ struct FHTBlueprintToggleGeneratorParams
 	FString KeyName;
 	int32 MaterialID = 16;
 	TArray<int32> MaterialIDs;
+	bool bToggleMaterialIDsTogether = false;
 	int32 SectionIndex = 0;
 	int32 LODIndex = 0;
 	int32 MaterialElementIndex = 0;
