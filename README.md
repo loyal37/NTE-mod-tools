@@ -21,7 +21,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.19.zip
+   HTToggleTool-v1.5.20.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -42,7 +42,7 @@
 
 `Function Switch` 可切换功能：
 
-- `Material visibility`：材质区域显示/隐藏。输入 `16` 切换单个材质，输入 `13,20` 在多个材质之间循环，输入 `13+20` 可同时显示或隐藏多个材质。
+- `Material visibility`：材质区域显示/隐藏。逗号分隔循环状态，`+` 连接同一状态内同时显示的材质；例如 `1+2,3+4` 会在“显示 1/2”“显示 3/4”“全部隐藏”之间循环。
 - `Texture switch`：材质贴图循环切换。
 - `Material switch`：对一个或多个 Material Slot 循环切换指定材质球；材质球选择列表会限制在当前 Character Folder 内。
 - `Material Instance`：重建材质节点并创建材质实例。
@@ -56,6 +56,7 @@
 ```text
 Material ID(s): 13,20
 Material ID(s): 13+20
+Material ID(s): 1+2,3+4
 Material Slot(s): 12,13
 Key: ctrl 6
 Key: shift 6

@@ -1017,12 +1017,57 @@ namespace HTToggleGenerator
 		SetDefaultValue(FindAnyPin(Node, TEXT("UserIndex")), TEXT("0"));
 	}
 
+	static TArray<FHTMaterialVisibilityGroup> GetMaterialVisibilityGroups(const FHTBlueprintToggleGeneratorParams& Params)
+	{
+		TArray<FHTMaterialVisibilityGroup> Groups = Params.MaterialVisibilityGroups;
+		if (Groups.Num() == 0)
+		{
+			TArray<int32> LegacyMaterialIDs = Params.MaterialIDs;
+			if (LegacyMaterialIDs.Num() == 0)
+			{
+				LegacyMaterialIDs.Add(Params.MaterialID);
+			}
+
+			if (Params.bToggleMaterialIDsTogether)
+			{
+				Groups.AddDefaulted_GetRef().MaterialIDs = MoveTemp(LegacyMaterialIDs);
+			}
+			else
+			{
+				for (const int32 MaterialID : LegacyMaterialIDs)
+				{
+					Groups.AddDefaulted_GetRef().MaterialIDs.Add(MaterialID);
+				}
+			}
+		}
+
+		TSet<int32> UsedMaterialIDs;
+		for (FHTMaterialVisibilityGroup& Group : Groups)
+		{
+			TArray<int32> UniqueMaterialIDs;
+			for (const int32 MaterialID : Group.MaterialIDs)
+			{
+				if (!UsedMaterialIDs.Contains(MaterialID))
+				{
+					UsedMaterialIDs.Add(MaterialID);
+					UniqueMaterialIDs.Add(MaterialID);
+				}
+			}
+			Group.MaterialIDs = MoveTemp(UniqueMaterialIDs);
+		}
+		Groups.RemoveAll([](const FHTMaterialVisibilityGroup& Group)
+		{
+			return Group.MaterialIDs.Num() == 0;
+		});
+		return Groups;
+	}
+
 	static TArray<int32> GetMaterialIDs(const FHTBlueprintToggleGeneratorParams& Params)
 	{
-		TArray<int32> MaterialIDs = Params.MaterialIDs;
-		if (MaterialIDs.Num() == 0)
+		TArray<int32> MaterialIDs;
+		for (const FHTMaterialVisibilityGroup& Group : GetMaterialVisibilityGroups(Params))
 		{
-			MaterialIDs.Add(Params.MaterialID);
+			MaterialIDs.Append(Group.MaterialIDs);
 		}
 		return MaterialIDs;
 	}
@@ -1117,12 +1162,7 @@ namespace HTToggleGenerator
 		{
 			return FMath::Max(2, Params.MaterialInterfacePaths.Num());
 		}
-		const TArray<int32> MaterialIDs = GetMaterialIDs(Params);
-		if (Params.bToggleMaterialIDsTogether)
-		{
-			return 2;
-		}
-		return MaterialIDs.Num() > 1 ? MaterialIDs.Num() + 1 : 2;
+		return FMath::Max(2, GetMaterialVisibilityGroups(Params).Num() + 1);
 	}
 
 	static UK2Node_ExecutionSequence* SpawnSequence(UEdGraph* Graph, const FVector2D Position, const int32 ThenCount)
@@ -1173,138 +1213,38 @@ namespace HTToggleGenerator
 		return ShowNode;
 	}
 
-	static UEdGraphPin* AddApplySingleMaterialNodes(
+	static UEdGraphPin* AddApplyMaterialNodes(
 		UEdGraph* Graph,
 		const FHTBlueprintToggleGeneratorParams& Params,
-		const int32 MaterialID,
 		UEdGraphPin* ExecIn,
 		UEdGraphPin* ValuePin,
 		const FVector2D Base,
 		FHTBlueprintToggleGeneratorResult& Result,
-		TArray<UEdGraphNode*>* OutNodes)
+		TArray<UEdGraphNode*>* OutNodes = nullptr)
 	{
-		UK2Node_SwitchInteger* SwitchNode = SpawnSwitchOnInt(Graph, Base, 2);
-		UK2Node_CallFunction* OwningNode = SpawnCall(Graph, UAnimInstance::StaticClass(), TEXT("GetOwningComponent"), Base + FVector2D(-140, 400), Result);
-
-		if (!SwitchNode || !OwningNode)
-		{
-			return nullptr;
-		}
-
-		AddNodeToList(OutNodes, SwitchNode);
-		AddNodeToList(OutNodes, OwningNode);
-
-		UK2Node_CallFunction* ShowNodeVisible = SpawnShowMaterialSectionNode(Graph, Base + FVector2D(680, -80), MaterialID, true, Params, FindAnyPin(OwningNode, UEdGraphSchema_K2::PN_ReturnValue), Result, OutNodes);
-		UK2Node_CallFunction* ShowNodeHidden = SpawnShowMaterialSectionNode(Graph, Base + FVector2D(680, 300), MaterialID, false, Params, FindAnyPin(OwningNode, UEdGraphSchema_K2::PN_ReturnValue), Result, OutNodes);
-
-		if (!ShowNodeVisible || !ShowNodeHidden)
-		{
-			return nullptr;
-		}
-
-		Connect(ExecIn, GetSchema()->FindExecutionPin(*SwitchNode, EGPD_Input), Result, TEXT("Exec -> Switch on Int"));
-		Connect(ValuePin, FindAnyPin(SwitchNode, TEXT("Selection")), Result, TEXT("Toggle value -> Switch Selection"));
-		Connect(FindPin(SwitchNode, TEXT("0"), EGPD_Output), GetSchema()->FindExecutionPin(*ShowNodeVisible, EGPD_Input), Result, TEXT("Switch 0 -> Show true"));
-		Connect(FindPin(SwitchNode, TEXT("1"), EGPD_Output), GetSchema()->FindExecutionPin(*ShowNodeHidden, EGPD_Input), Result, TEXT("Switch 1 -> Show false"));
-
-		return GetSchema()->FindExecutionPin(*ShowNodeHidden, EGPD_Output);
-	}
-
-	static UEdGraphPin* AddApplyMultiMaterialNodes(
-		UEdGraph* Graph,
-		const FHTBlueprintToggleGeneratorParams& Params,
-		const TArray<int32>& MaterialIDs,
-		UEdGraphPin* ExecIn,
-		UEdGraphPin* ValuePin,
-		const FVector2D Base,
-		FHTBlueprintToggleGeneratorResult& Result,
-		TArray<UEdGraphNode*>* OutNodes)
-	{
-		const int32 StateCount = MaterialIDs.Num() + 1;
+		const TArray<FHTMaterialVisibilityGroup> Groups = GetMaterialVisibilityGroups(Params);
+		const TArray<int32> MaterialIDs = GetMaterialIDs(Params);
+		const int32 StateCount = Groups.Num() + 1;
 		UK2Node_SwitchInteger* SwitchNode = SpawnSwitchOnInt(Graph, Base, StateCount);
-		UK2Node_CallFunction* OwningNode = SpawnCall(Graph, UAnimInstance::StaticClass(), TEXT("GetOwningComponent"), Base + FVector2D(-120, 520), Result);
-
-		if (!SwitchNode || !OwningNode)
-		{
-			return nullptr;
-		}
-
-		AddNodeToList(OutNodes, SwitchNode);
-		AddNodeToList(OutNodes, OwningNode);
-
-		Connect(ExecIn, GetSchema()->FindExecutionPin(*SwitchNode, EGPD_Input), Result, TEXT("Exec -> Switch on Int"));
-		Connect(ValuePin, FindAnyPin(SwitchNode, TEXT("Selection")), Result, TEXT("Toggle value -> Switch Selection"));
-
-		UEdGraphPin* LastExecOut = nullptr;
-		for (int32 StateIndex = 0; StateIndex < StateCount; ++StateIndex)
-		{
-			const float StateYOffset = static_cast<float>(StateIndex * 360);
-			UK2Node_ExecutionSequence* Sequence = SpawnSequence(Graph, Base + FVector2D(520, -80 + StateYOffset), MaterialIDs.Num());
-			if (!Sequence)
-			{
-				continue;
-			}
-
-			AddNodeToList(OutNodes, Sequence);
-			Connect(FindPin(SwitchNode, FName(*FString::FromInt(StateIndex)), EGPD_Output), FindPin(Sequence, UEdGraphSchema_K2::PN_Execute, EGPD_Input), Result, FString::Printf(TEXT("Switch %d -> material sequence"), StateIndex));
-
-			for (int32 MaterialIndex = 0; MaterialIndex < MaterialIDs.Num(); ++MaterialIndex)
-			{
-				const bool bShow = StateIndex == MaterialIndex;
-				UK2Node_CallFunction* ShowNode = SpawnShowMaterialSectionNode(
-					Graph,
-					Base + FVector2D(1050, -170 + StateYOffset + MaterialIndex * 170),
-					MaterialIDs[MaterialIndex],
-					bShow,
-					Params,
-					FindAnyPin(OwningNode, UEdGraphSchema_K2::PN_ReturnValue),
-					Result,
-					OutNodes);
-
-				if (!ShowNode)
-				{
-					continue;
-				}
-
-				Connect(Sequence->GetThenPinGivenIndex(MaterialIndex), GetSchema()->FindExecutionPin(*ShowNode, EGPD_Input), Result, FString::Printf(TEXT("State %d -> Material %d"), StateIndex, MaterialIDs[MaterialIndex]));
-				LastExecOut = GetSchema()->FindExecutionPin(*ShowNode, EGPD_Output);
-			}
-		}
-
-		return LastExecOut;
-	}
-
-	static UEdGraphPin* AddApplyGroupedMaterialNodes(
-		UEdGraph* Graph,
-		const FHTBlueprintToggleGeneratorParams& Params,
-		const TArray<int32>& MaterialIDs,
-		UEdGraphPin* ExecIn,
-		UEdGraphPin* ValuePin,
-		const FVector2D Base,
-		FHTBlueprintToggleGeneratorResult& Result,
-		TArray<UEdGraphNode*>* OutNodes)
-	{
-		UK2Node_SwitchInteger* SwitchNode = SpawnSwitchOnInt(Graph, Base, 2);
 		UK2Node_CallFunction* OwningNode = SpawnCall(
 			Graph,
 			UAnimInstance::StaticClass(),
 			TEXT("GetOwningComponent"),
-			Base + FVector2D(-120, 780),
+			Base + FVector2D(-120, StateCount * 360 + 120),
 			Result);
-		if (!SwitchNode || !OwningNode || MaterialIDs.Num() < 2)
+		if (!SwitchNode || !OwningNode || Groups.Num() == 0 || MaterialIDs.Num() == 0)
 		{
 			return nullptr;
 		}
 
 		AddNodeToList(OutNodes, SwitchNode);
 		AddNodeToList(OutNodes, OwningNode);
-		Connect(ExecIn, GetSchema()->FindExecutionPin(*SwitchNode, EGPD_Input), Result, TEXT("Exec -> Grouped Material Switch on Int"));
-		Connect(ValuePin, FindAnyPin(SwitchNode, TEXT("Selection")), Result, TEXT("Grouped material value -> Switch Selection"));
+		Connect(ExecIn, GetSchema()->FindExecutionPin(*SwitchNode, EGPD_Input), Result, TEXT("Exec -> Material Group Switch on Int"));
+		Connect(ValuePin, FindAnyPin(SwitchNode, TEXT("Selection")), Result, TEXT("Material group value -> Switch Selection"));
 
 		UEdGraphPin* LastExecOut = nullptr;
-		for (int32 StateIndex = 0; StateIndex < 2; ++StateIndex)
+		for (int32 StateIndex = 0; StateIndex < StateCount; ++StateIndex)
 		{
-			const bool bShow = StateIndex == 0;
 			const float StateYOffset = static_cast<float>(StateIndex * 360);
 			UK2Node_ExecutionSequence* Sequence = SpawnSequence(
 				Graph,
@@ -1320,10 +1260,11 @@ namespace HTToggleGenerator
 				FindPin(SwitchNode, FName(*FString::FromInt(StateIndex)), EGPD_Output),
 				FindPin(Sequence, UEdGraphSchema_K2::PN_Execute, EGPD_Input),
 				Result,
-				FString::Printf(TEXT("Switch %d -> grouped material sequence"), StateIndex));
+				FString::Printf(TEXT("Switch %d -> material group sequence"), StateIndex));
 
 			for (int32 MaterialIndex = 0; MaterialIndex < MaterialIDs.Num(); ++MaterialIndex)
 			{
+				const bool bShow = StateIndex < Groups.Num() && Groups[StateIndex].MaterialIDs.Contains(MaterialIDs[MaterialIndex]);
 				UK2Node_CallFunction* ShowNode = SpawnShowMaterialSectionNode(
 					Graph,
 					Base + FVector2D(1050 + MaterialIndex * 520, -80 + StateYOffset),
@@ -1342,34 +1283,12 @@ namespace HTToggleGenerator
 					Sequence->GetThenPinGivenIndex(MaterialIndex),
 					GetSchema()->FindExecutionPin(*ShowNode, EGPD_Input),
 					Result,
-					FString::Printf(TEXT("Grouped state %d -> Material %d"), StateIndex, MaterialIDs[MaterialIndex]));
+					FString::Printf(TEXT("Material group state %d -> Material %d"), StateIndex, MaterialIDs[MaterialIndex]));
 				LastExecOut = GetSchema()->FindExecutionPin(*ShowNode, EGPD_Output);
 			}
 		}
 
 		return LastExecOut;
-	}
-
-	static UEdGraphPin* AddApplyMaterialNodes(
-		UEdGraph* Graph,
-		const FHTBlueprintToggleGeneratorParams& Params,
-		UEdGraphPin* ExecIn,
-		UEdGraphPin* ValuePin,
-		const FVector2D Base,
-		FHTBlueprintToggleGeneratorResult& Result,
-		TArray<UEdGraphNode*>* OutNodes = nullptr)
-	{
-		const TArray<int32> MaterialIDs = GetMaterialIDs(Params);
-		if (Params.bToggleMaterialIDsTogether && MaterialIDs.Num() > 1)
-		{
-			return AddApplyGroupedMaterialNodes(Graph, Params, MaterialIDs, ExecIn, ValuePin, Base, Result, OutNodes);
-		}
-		if (MaterialIDs.Num() > 1)
-		{
-			return AddApplyMultiMaterialNodes(Graph, Params, MaterialIDs, ExecIn, ValuePin, Base, Result, OutNodes);
-		}
-
-		return AddApplySingleMaterialNodes(Graph, Params, MaterialIDs[0], ExecIn, ValuePin, Base, Result, OutNodes);
 	}
 
 	static UEdGraphPin* AddApplyTextureNodes(
@@ -1689,18 +1608,16 @@ namespace HTToggleGenerator
 		Connect(FindAnyPin(GetAnimDefault, ToggleVariable), FindAnyPin(SetSaveDefault, SaveVariable), Result, TEXT("Anim default -> Save default"));
 		Connect(GetSchema()->FindExecutionPin(*SetSaveDefault, EGPD_Output), GetSchema()->FindExecutionPin(*SaveDefaultSlot, EGPD_Input), Result, TEXT("Set Save default -> SaveGameToSlot"));
 		Connect(FindAnyPin(CreateSave, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SaveDefaultSlot, TEXT("SaveGameObject")), Result, TEXT("CreateSave Return -> SaveGameToSlot"));
-		const int32 AssetStateCount = Params.Mode == EHTBlueprintToggleMode::Texture ? GetCycleStateCount(Params) : Materials.Num();
-		const float CommentHeight = Params.Mode == EHTBlueprintToggleMode::Texture || Params.Mode == EHTBlueprintToggleMode::MaterialInterface
-			? FMath::Max(1800.0f, 1000.0f + AssetStateCount * 360.0f)
-			: 1800.0f;
-		const float GroupedVisibilityWidth = Params.bToggleMaterialIDsTogether
+		const int32 AssetStateCount = GetCycleStateCount(Params);
+		const float CommentHeight = FMath::Max(1800.0f, 1000.0f + AssetStateCount * 360.0f);
+		const float VisibilityGroupWidth = Params.Mode == EHTBlueprintToggleMode::MaterialSection
 			? FMath::Max(0, GetMaterialIDs(Params).Num() - 1) * 520.0f
 			: 0.0f;
 		UEdGraphNode_Comment* Comment = SpawnCommentBox(
 			Graph,
 			FString::Printf(TEXT("HT Init - %s"), *ToggleVariable.ToString()),
 			FVector2D(-1500, BaseY - 560),
-			FVector2D(Params.Mode == EHTBlueprintToggleMode::Texture || Params.Mode == EHTBlueprintToggleMode::MaterialInterface ? 7000 + FMath::Max(0, MaterialElementIndices.Num() - 1) * 520 : 6100 + GroupedVisibilityWidth, CommentHeight),
+			FVector2D(Params.Mode == EHTBlueprintToggleMode::Texture || Params.Mode == EHTBlueprintToggleMode::MaterialInterface ? 7000 + FMath::Max(0, MaterialElementIndices.Num() - 1) * 520 : 6100 + VisibilityGroupWidth, CommentHeight),
 			FLinearColor(0.08f, 0.22f, 0.34f, 1.0f));
 		TArray<UEdGraphNode*> CommentNodes = { DoesSaveExist, Branch, LoadGame, CastSave, GetSaveValue, SetAnimValue, CreateSave, GetAnimDefault, SetSaveDefault, SaveDefaultSlot };
 		CommentNodes.Append(SetupNodes);
@@ -1833,18 +1750,16 @@ namespace HTToggleGenerator
 		UEdGraphPin* SaveThen = GetSchema()->FindExecutionPin(*SaveSlot, EGPD_Output);
 		AddApplyToggleNodes(Graph, Params, MIDVariables, TextureStatesByMaterial, Materials, SaveThen, FindSetOutputPin(SetAnimValue), FVector2D(2900, BaseY), Result, &MaterialNodes);
 
-		const int32 AssetStateCount = Params.Mode == EHTBlueprintToggleMode::Texture ? GetCycleStateCount(Params) : Materials.Num();
-		const float CommentHeight = Params.Mode == EHTBlueprintToggleMode::Texture || Params.Mode == EHTBlueprintToggleMode::MaterialInterface
-			? FMath::Max(1800.0f, 900.0f + AssetStateCount * 360.0f)
-			: 1800.0f;
-		const float GroupedVisibilityWidth = Params.bToggleMaterialIDsTogether
+		const int32 AssetStateCount = GetCycleStateCount(Params);
+		const float CommentHeight = FMath::Max(1800.0f, 900.0f + AssetStateCount * 360.0f);
+		const float VisibilityGroupWidth = Params.Mode == EHTBlueprintToggleMode::MaterialSection
 			? FMath::Max(0, GetMaterialIDs(Params).Num() - 1) * 520.0f
 			: 0.0f;
 		UEdGraphNode_Comment* Comment = SpawnCommentBox(
 			Graph,
 			FString::Printf(TEXT("HT Update - %s"), *ToggleVariable.ToString()),
 			FVector2D(-1030, BaseY - 220),
-			FVector2D(5600 + FMath::Max(0, MaterialElementIndices.Num() - 1) * 520 + GroupedVisibilityWidth, CommentHeight),
+			FVector2D(5600 + FMath::Max(0, MaterialElementIndices.Num() - 1) * 520 + VisibilityGroupWidth, CommentHeight),
 			FLinearColor(0.10f, 0.24f, 0.18f, 1.0f));
 		TArray<UEdGraphNode*> CommentNodes = { GetController, WasPressed };
 		if (KeySpec.HasModifier())
@@ -2132,7 +2047,7 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 		}
 		else
 		{
-			NextLayoutBaseY += 1600;
+			NextLayoutBaseY += FMath::Max(1600, 1200 + GetCycleStateCount(Params) * 360);
 		}
 	}
 
