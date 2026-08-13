@@ -505,8 +505,33 @@ namespace HTToggleGenerator
 			(Blueprint->GeneratedClass && FindFProperty<FProperty>(Blueprint->GeneratedClass, VariableName));
 	}
 
-	static bool EnsureIntVariable(UBlueprint* Blueprint, const FName VariableName, FHTBlueprintToggleGeneratorResult& Result, const FString& Label)
+	static bool EnsureIntVariable(UBlueprint* Blueprint, const FName VariableName, const TOptional<int32> InitialValue, FHTBlueprintToggleGeneratorResult& Result, const FString& Label)
 	{
+		const FString DefaultValue = FString::FromInt(InitialValue.Get(0));
+		const int32 VariableIndex = FBlueprintEditorUtils::FindNewVariableIndex(Blueprint, VariableName);
+		if (VariableIndex != INDEX_NONE)
+		{
+			FBPVariableDescription& Variable = Blueprint->NewVariables[VariableIndex];
+			if (Variable.VarType.PinCategory != UEdGraphSchema_K2::PC_Int)
+			{
+				Result.Errors.Add(FString::Printf(TEXT("%s variable is not an int: %s"), *Label, *VariableName.ToString()));
+				return false;
+			}
+
+			if (InitialValue.IsSet() && Variable.DefaultValue != DefaultValue)
+			{
+				Blueprint->Modify();
+				Variable.DefaultValue = DefaultValue;
+				FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+				Result.Messages.Add(FString::Printf(TEXT("%s variable default updated: %s = %d"), *Label, *VariableName.ToString(), InitialValue.GetValue()));
+			}
+			else
+			{
+				Result.Messages.Add(FString::Printf(TEXT("%s variable already exists: %s"), *Label, *VariableName.ToString()));
+			}
+			return true;
+		}
+
 		if (HasVariable(Blueprint, VariableName))
 		{
 			Result.Messages.Add(FString::Printf(TEXT("%s 已存在变量: %s"), *Label, *VariableName.ToString()));
@@ -516,7 +541,7 @@ namespace HTToggleGenerator
 		FEdGraphPinType PinType;
 		PinType.PinCategory = UEdGraphSchema_K2::PC_Int;
 
-		if (!FBlueprintEditorUtils::AddMemberVariable(Blueprint, VariableName, PinType, TEXT("0")))
+		if (!FBlueprintEditorUtils::AddMemberVariable(Blueprint, VariableName, PinType, DefaultValue))
 		{
 			Result.Errors.Add(FString::Printf(TEXT("%s 添加变量失败: %s"), *Label, *VariableName.ToString()));
 			return false;
@@ -1838,6 +1863,15 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 		SlotName = ToggleVariable.ToString();
 	}
 
+	const int32 StateCount = GetCycleStateCount(Params);
+	if (Params.InitialState < 0 || Params.InitialState >= StateCount)
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("Initial State must be between 0 and %d for this toggle."),
+			StateCount - 1));
+		return Result;
+	}
+
 	TArray<UMaterialInterface*> TextureSourceMaterials;
 	TArray<TArray<UTexture*>> TextureStatesByMaterial;
 	TArray<UMaterialInterface*> MaterialInterfaces;
@@ -1997,8 +2031,14 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 		}
 	}
 
-	EnsureIntVariable(AnimBlueprint, ToggleVariable, Result, TEXT("动画蓝图"));
-	EnsureIntVariable(SaveBlueprint, SaveVariable, Result, TEXT("SaveGame 蓝图"));
+	const TOptional<int32> InitialVariableValue = Params.Mode == EHTBlueprintToggleMode::MaterialSection
+		? TOptional<int32>(Params.InitialState)
+		: TOptional<int32>();
+	if (!EnsureIntVariable(AnimBlueprint, ToggleVariable, InitialVariableValue, Result, TEXT("Animation Blueprint")) ||
+		!EnsureIntVariable(SaveBlueprint, SaveVariable, InitialVariableValue, Result, TEXT("SaveGame Blueprint")))
+	{
+		return Result;
+	}
 
 	if (Params.Mode == EHTBlueprintToggleMode::Texture)
 	{

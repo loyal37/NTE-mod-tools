@@ -10,6 +10,7 @@ class STextBlock;
 class SVerticalBox;
 class SWindow;
 class SWidgetSwitcher;
+template<typename NumericType> class SSpinBox;
 class ISlateViewport;
 class UMaterialInterface;
 struct FAssetData;
@@ -121,6 +122,7 @@ private:
 	TSharedPtr<SEditableTextBox> ToggleVariableBox;
 	TSharedPtr<SEditableTextBox> KeyNameBox;
 	TSharedPtr<SEditableTextBox> MaterialIDsBox;
+	TSharedPtr<SSpinBox<int32>> InitialStateSpinBox;
 	TSharedPtr<SEditableTextBox> MaterialInterfaceSlotsBox;
 	TSharedPtr<SEditableTextBox> CharacterFolderBox;
 	TSharedPtr<SEditableTextBox> TextureParameterBox;

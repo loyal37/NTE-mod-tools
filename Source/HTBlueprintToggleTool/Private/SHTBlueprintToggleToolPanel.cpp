@@ -46,6 +46,7 @@
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SSegmentedControl.h"
+#include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -639,6 +640,37 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 								SAssignNew(MaterialIDsBox, SEditableTextBox)
 								.HintText(LOCTEXT("MaterialIDsHint", "Single: 16    Cycle: 13,20    Group cycle: 1+2,3+4"))
 								.ToolTipText(LOCTEXT("MaterialIDsTooltip", "Separate states with commas and join materials in the same state with +. Example: 1+2,3+4 cycles group 1, group 2, then hides all.")))
+						]
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 6)
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.VAlign(VAlign_Center)
+							[
+								SNew(SBox)
+								.WidthOverride(150)
+								[
+									SNew(STextBlock).Text(LOCTEXT("InitialState", "Initial State"))
+								]
+							]
+							+ SHorizontalBox::Slot()
+							.FillWidth(1.0f)
+							[
+								SAssignNew(InitialStateSpinBox, SSpinBox<int32>)
+								.MinValue(0)
+								.MaxValue_Lambda([this]()
+								{
+									TArray<FHTMaterialVisibilityGroup> Groups;
+									FString ParseError;
+									return ParseMaterialVisibilityGroups(Groups, ParseError) ? Groups.Num() : 0;
+								})
+								.Delta(1)
+								.Value(0)
+								.ToolTipText(LOCTEXT("InitialStateTooltip", "Default state used when this SaveGame slot does not exist. State order is unchanged and the hide-all state remains last."))
+							]
 						]
 					]
 
@@ -2687,6 +2719,16 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 		{
 			MaterialIDs.Append(Group.MaterialIDs);
 		}
+
+		const int32 InitialState = InitialStateSpinBox.IsValid() ? InitialStateSpinBox->GetValue() : 0;
+		const int32 StateCount = MaterialVisibilityGroups.Num() + 1;
+		if (InitialState < 0 || InitialState >= StateCount)
+		{
+			ShowPanelError(FText::Format(
+				LOCTEXT("InvalidInitialState", "Initial State must be between 0 and {0} for the current Material ID groups."),
+				FText::AsNumber(StateCount - 1)));
+			return FReply::Handled();
+		}
 	}
 	else if (ToggleMode == EHTBlueprintToggleMode::Texture)
 	{
@@ -2752,6 +2794,9 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	Params.MaterialID = MaterialIDs.Num() > 0 ? MaterialIDs[0] : 0;
 	Params.bToggleMaterialIDsTogether = MaterialVisibilityGroups.Num() == 1 && MaterialVisibilityGroups[0].MaterialIDs.Num() > 1;
 	Params.MaterialVisibilityGroups = MaterialVisibilityGroups;
+	Params.InitialState = ToggleMode == EHTBlueprintToggleMode::MaterialSection && InitialStateSpinBox.IsValid()
+		? InitialStateSpinBox->GetValue()
+		: 0;
 	Params.SectionIndex = 0;
 	Params.LODIndex = 0;
 	Params.MaterialElementIndex = TextureMaterialSlots.Num() > 0 ? TextureMaterialSlots[0] : 0;
