@@ -42,7 +42,7 @@
 
 `Function Switch` 可切换功能：
 
-- `Material visibility`：材质区域显示/隐藏。逗号分隔循环状态，`+` 连接同一状态内同时显示的材质；例如 `1+2,3+4` 会在“显示 1/2”“显示 3/4”“全部隐藏”之间循环。
+- `Material visibility`：材质区域显示/隐藏。逗号分隔循环状态，`+` 连接同一状态内同时显示的材质；例如 `1+2,3+4` 会在“显示 1/2”“显示 3/4”“全部隐藏”之间循环。`Initial State` 可设置首次没有对应存档时使用的默认状态，不会改变状态顺序，全部隐藏仍然是最后一个状态。
 - `Texture switch`：材质贴图循环切换。
 - `Material switch`：对一个或多个 Material Slot 循环切换指定材质球；材质球选择列表会限制在当前 Character Folder 内。
 - `Material Instance`：重建材质节点并创建材质实例。
