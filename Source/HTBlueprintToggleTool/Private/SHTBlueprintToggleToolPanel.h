@@ -59,7 +59,7 @@ private:
 	FReply OnAnalyzeMaterialsClicked();
 	FReply OnSelectMaterialGroupClicked(int32 GroupIndex);
 
-	bool ParseMaterialIDs(TArray<int32>& OutMaterialIDs, bool& bOutToggleTogether, FString& OutError) const;
+	bool ParseMaterialVisibilityGroups(TArray<FHTMaterialVisibilityGroup>& OutGroups, FString& OutError) const;
 	bool ParseTextureMaterialSlots(TArray<int32>& OutMaterialSlots, FString& OutError) const;
 	bool ParseMaterialSlotsText(const FString& RawValue, TArray<int32>& OutMaterialSlots, FString& OutError) const;
 	bool ParseTextureMaterialGroups(TArray<FHTTextureMaterialSlotGroup>& OutGroups, FString& OutError) const;

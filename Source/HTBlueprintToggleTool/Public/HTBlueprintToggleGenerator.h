@@ -16,6 +16,11 @@ struct FHTTextureMaterialSlotGroup
 	TArray<FString> TexturePaths;
 };
 
+struct FHTMaterialVisibilityGroup
+{
+	TArray<int32> MaterialIDs;
+};
+
 struct FHTBlueprintToggleGeneratorParams
 {
 	EHTBlueprintToggleMode Mode = EHTBlueprintToggleMode::MaterialSection;
@@ -28,6 +33,7 @@ struct FHTBlueprintToggleGeneratorParams
 	int32 MaterialID = 16;
 	TArray<int32> MaterialIDs;
 	bool bToggleMaterialIDsTogether = false;
+	TArray<FHTMaterialVisibilityGroup> MaterialVisibilityGroups;
 	int32 SectionIndex = 0;
 	int32 LODIndex = 0;
 	int32 MaterialElementIndex = 0;

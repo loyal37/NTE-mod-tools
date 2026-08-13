@@ -637,8 +637,8 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 							MakeTextRow(
 								LOCTEXT("MaterialIDs", "Material ID(s)"),
 								SAssignNew(MaterialIDsBox, SEditableTextBox)
-								.HintText(LOCTEXT("MaterialIDsHint", "Single: 16    Cycle: 13,20    Together: 13+20"))
-								.ToolTipText(LOCTEXT("MaterialIDsTooltip", "Use commas to cycle materials. Use + to show or hide multiple materials together.")))
+								.HintText(LOCTEXT("MaterialIDsHint", "Single: 16    Cycle: 13,20    Group cycle: 1+2,3+4"))
+								.ToolTipText(LOCTEXT("MaterialIDsTooltip", "Separate states with commas and join materials in the same state with +. Example: 1+2,3+4 cycles group 1, group 2, then hides all.")))
 						]
 					]
 
@@ -2422,10 +2422,9 @@ bool SHTBlueprintToggleToolPanel::SyncBlueprintPathsFromCharacterFolder()
 	return bChanged;
 }
 
-bool SHTBlueprintToggleToolPanel::ParseMaterialIDs(TArray<int32>& OutMaterialIDs, bool& bOutToggleTogether, FString& OutError) const
+bool SHTBlueprintToggleToolPanel::ParseMaterialVisibilityGroups(TArray<FHTMaterialVisibilityGroup>& OutGroups, FString& OutError) const
 {
-	OutMaterialIDs.Reset();
-	bOutToggleTogether = false;
+	OutGroups.Reset();
 
 	FString RawValue = HTTogglePanel::TextBoxString(MaterialIDsBox);
 	RawValue.TrimStartAndEndInline();
@@ -2436,63 +2435,60 @@ bool SHTBlueprintToggleToolPanel::ParseMaterialIDs(TArray<int32>& OutMaterialIDs
 
 	if (RawValue.IsEmpty())
 	{
-		OutError = TEXT("Enter at least one Material ID. Examples: 16, 13,20, or 13+20.");
+		OutError = TEXT("Enter at least one Material ID. Examples: 16, 13,20, 13+20, or 1+2,3+4.");
 		return false;
 	}
 
-	bOutToggleTogether = RawValue.Contains(TEXT("+"));
-	if (bOutToggleTogether && (RawValue.Contains(TEXT(",")) || RawValue.Contains(TEXT(";"))))
+	RawValue.ReplaceInline(TEXT(";"), TEXT(","));
+	RawValue.ReplaceInline(TEXT(" "), TEXT(","));
+	RawValue.ReplaceInline(TEXT("\r"), TEXT(","));
+	RawValue.ReplaceInline(TEXT("\n"), TEXT(","));
+	RawValue.ReplaceInline(TEXT("\t"), TEXT(","));
+	while (RawValue.ReplaceInline(TEXT(",,"), TEXT(",")) > 0)
 	{
-		OutError = TEXT("Do not mix + with commas. Use 13+20 to hide together, or 13,20 to cycle.");
-		return false;
 	}
+	RawValue.ReplaceInline(TEXT(",+"), TEXT("+"));
+	RawValue.ReplaceInline(TEXT("+,"), TEXT("+"));
 
-	FString Delimiter = TEXT(",");
-	if (bOutToggleTogether)
+	TSet<int32> UsedMaterialIDs;
+	TArray<FString> GroupParts;
+	RawValue.ParseIntoArray(GroupParts, TEXT(","), false);
+	for (int32 GroupIndex = 0; GroupIndex < GroupParts.Num(); ++GroupIndex)
 	{
-		Delimiter = TEXT("+");
-		RawValue.ReplaceInline(TEXT(" "), TEXT(""));
-		RawValue.ReplaceInline(TEXT("\r"), TEXT(""));
-		RawValue.ReplaceInline(TEXT("\n"), TEXT(""));
-		RawValue.ReplaceInline(TEXT("\t"), TEXT(""));
-	}
-	else
-	{
-		RawValue.ReplaceInline(TEXT(";"), TEXT(","));
-		RawValue.ReplaceInline(TEXT(" "), TEXT(","));
-		RawValue.ReplaceInline(TEXT("\r"), TEXT(","));
-		RawValue.ReplaceInline(TEXT("\n"), TEXT(","));
-		RawValue.ReplaceInline(TEXT("\t"), TEXT(","));
-	}
-
-	TArray<FString> Parts;
-	RawValue.ParseIntoArray(Parts, *Delimiter, true);
-	for (FString Part : Parts)
-	{
-		Part.TrimStartAndEndInline();
-		if (Part.IsEmpty())
+		FString GroupText = GroupParts[GroupIndex];
+		GroupText.TrimStartAndEndInline();
+		if (GroupText.IsEmpty())
 		{
-			continue;
-		}
-
-		int32 MaterialID = INDEX_NONE;
-		if (!LexTryParseString(MaterialID, *Part) || MaterialID < 0)
-		{
-			OutError = FString::Printf(TEXT("Invalid Material ID: %s"), *Part);
+			OutError = FString::Printf(TEXT("Material group %d is empty."), GroupIndex + 1);
 			return false;
 		}
 
-		OutMaterialIDs.AddUnique(MaterialID);
+		FHTMaterialVisibilityGroup& Group = OutGroups.AddDefaulted_GetRef();
+		TArray<FString> MaterialParts;
+		GroupText.ParseIntoArray(MaterialParts, TEXT("+"), false);
+		for (FString MaterialPart : MaterialParts)
+		{
+			MaterialPart.TrimStartAndEndInline();
+			int32 MaterialID = INDEX_NONE;
+			if (MaterialPart.IsEmpty() || !LexTryParseString(MaterialID, *MaterialPart) || MaterialID < 0)
+			{
+				OutError = FString::Printf(TEXT("Invalid Material ID in group %d: %s"), GroupIndex + 1, *MaterialPart);
+				return false;
+			}
+			if (UsedMaterialIDs.Contains(MaterialID))
+			{
+				OutError = FString::Printf(TEXT("Material ID %d appears more than once."), MaterialID);
+				return false;
+			}
+
+			UsedMaterialIDs.Add(MaterialID);
+			Group.MaterialIDs.Add(MaterialID);
+		}
 	}
 
-	if (OutMaterialIDs.Num() == 0)
+	if (OutGroups.Num() == 0)
 	{
 		OutError = TEXT("Enter at least one valid Material ID.");
-		return false;
-	}
-	if (bOutToggleTogether && OutMaterialIDs.Num() < 2)
-	{
-		OutError = TEXT("Together mode needs at least two Material IDs, for example 13+20.");
 		return false;
 	}
 
@@ -2675,17 +2671,21 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 		return FReply::Handled();
 	}
 
+	TArray<FHTMaterialVisibilityGroup> MaterialVisibilityGroups;
 	TArray<int32> MaterialIDs;
-	bool bToggleMaterialIDsTogether = false;
 	TArray<int32> TextureMaterialSlots;
 	TArray<FHTTextureMaterialSlotGroup> TextureMaterialGroupsForGeneration;
 	if (ToggleMode == EHTBlueprintToggleMode::MaterialSection)
 	{
 		FString MaterialIDError;
-		if (!ParseMaterialIDs(MaterialIDs, bToggleMaterialIDsTogether, MaterialIDError))
+		if (!ParseMaterialVisibilityGroups(MaterialVisibilityGroups, MaterialIDError))
 		{
 			ShowPanelError(FText::FromString(MaterialIDError));
 			return FReply::Handled();
+		}
+		for (const FHTMaterialVisibilityGroup& Group : MaterialVisibilityGroups)
+		{
+			MaterialIDs.Append(Group.MaterialIDs);
 		}
 	}
 	else if (ToggleMode == EHTBlueprintToggleMode::Texture)
@@ -2750,7 +2750,8 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	Params.KeyName = KeyName;
 	Params.MaterialIDs = MaterialIDs;
 	Params.MaterialID = MaterialIDs.Num() > 0 ? MaterialIDs[0] : 0;
-	Params.bToggleMaterialIDsTogether = bToggleMaterialIDsTogether;
+	Params.bToggleMaterialIDsTogether = MaterialVisibilityGroups.Num() == 1 && MaterialVisibilityGroups[0].MaterialIDs.Num() > 1;
+	Params.MaterialVisibilityGroups = MaterialVisibilityGroups;
 	Params.SectionIndex = 0;
 	Params.LODIndex = 0;
 	Params.MaterialElementIndex = TextureMaterialSlots.Num() > 0 ? TextureMaterialSlots[0] : 0;
