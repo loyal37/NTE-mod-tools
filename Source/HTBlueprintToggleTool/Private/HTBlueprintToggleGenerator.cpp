@@ -1292,7 +1292,7 @@ namespace HTToggleGenerator
 		{
 			return FMath::Max(2, Params.MaterialInterfacePaths.Num());
 		}
-		return FMath::Max(2, GetMaterialVisibilityGroups(Params).Num() + 1);
+		return FMath::Max(2, GetMaterialVisibilityGroups(Params).Num() + (Params.bIncludeHiddenMaterialState ? 1 : 0));
 	}
 
 	static UK2Node_ExecutionSequence* SpawnSequence(UEdGraph* Graph, const FVector2D Position, const int32 ThenCount)
@@ -1354,7 +1354,7 @@ namespace HTToggleGenerator
 	{
 		const TArray<FHTMaterialVisibilityGroup> Groups = GetMaterialVisibilityGroups(Params);
 		const TArray<int32> MaterialIDs = GetMaterialIDs(Params);
-		const int32 StateCount = Groups.Num() + 1;
+		const int32 StateCount = GetCycleStateCount(Params);
 		UK2Node_SwitchInteger* SwitchNode = SpawnSwitchOnInt(Graph, Base, StateCount);
 		UK2Node_CallFunction* OwningNode = SpawnCall(
 			Graph,
@@ -1726,7 +1726,22 @@ namespace HTToggleGenerator
 		Connect(FindAnyPin(LoadGame, UEdGraphSchema_K2::PN_ReturnValue), CastSave->GetCastSourcePin(), Result, TEXT("Load Return -> Cast Object"));
 		Connect(CastSave->GetCastResultPin(), FindSelfPin(GetSaveValue), Result, TEXT("Cast Result -> Save value target"));
 		Connect(CastSave->GetValidCastPin(), GetSchema()->FindExecutionPin(*SetAnimValue, EGPD_Input), Result, TEXT("Cast valid -> Set Anim"));
-		Connect(FindAnyPin(GetSaveValue, SaveVariable), FindAnyPin(SetAnimValue, ToggleVariable), Result, TEXT("Save value -> Anim value"));
+		UEdGraphPin* RestoredStatePin = FindAnyPin(GetSaveValue, SaveVariable);
+		if (Params.Mode == EHTBlueprintToggleMode::MaterialSection && !Params.bIncludeHiddenMaterialState)
+		{
+			// An older save may still contain the removed hide-all state or a group index that no longer exists.
+			UK2Node_CallFunction* ClampSavedState = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("Clamp"), FVector2D(700 + FlowOffsetX, TrueY + 180), Result);
+			if (!ClampSavedState)
+			{
+				return;
+			}
+			SetDefaultValue(FindAnyPin(ClampSavedState, TEXT("Min")), TEXT("0"));
+			SetDefaultValue(FindAnyPin(ClampSavedState, TEXT("Max")), FString::FromInt(GetCycleStateCount(Params) - 1));
+			Connect(RestoredStatePin, FindAnyPin(ClampSavedState, TEXT("Value")), Result, TEXT("Saved material group -> Clamp"));
+			RestoredStatePin = FindAnyPin(ClampSavedState, UEdGraphSchema_K2::PN_ReturnValue);
+			SetupNodes.Add(ClampSavedState);
+		}
+		Connect(RestoredStatePin, FindAnyPin(SetAnimValue, ToggleVariable), Result, TEXT("Save value -> Anim value"));
 
 		TArray<UEdGraphNode*> MaterialNodes;
 		UEdGraphPin* SetAnimThen = GetSchema()->FindExecutionPin(*SetAnimValue, EGPD_Output);
@@ -2402,6 +2417,13 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 	UBlueprint* SaveBlueprint = LoadBlueprint(Params.SaveGameBlueprintPath, Result, TEXT("SaveGame 蓝图"));
 	if (!AnimBlueprint || !SaveBlueprint)
 	{
+		return Result;
+	}
+
+	if (Params.Mode == EHTBlueprintToggleMode::MaterialSection &&
+		!Params.bIncludeHiddenMaterialState && GetMaterialVisibilityGroups(Params).Num() < 2)
+	{
+		Result.Errors.Add(TEXT("Material group cycling without a hide-all state requires at least two non-empty groups."));
 		return Result;
 	}
 

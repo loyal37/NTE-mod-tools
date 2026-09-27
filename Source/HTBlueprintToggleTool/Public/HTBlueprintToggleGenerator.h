@@ -35,6 +35,7 @@ struct FHTBlueprintToggleGeneratorParams
 	TArray<int32> MaterialIDs;
 	bool bToggleMaterialIDsTogether = false;
 	TArray<FHTMaterialVisibilityGroup> MaterialVisibilityGroups;
+	bool bIncludeHiddenMaterialState = true;
 	int32 InitialState = 0;
 	int32 SectionIndex = 0;
 	int32 LODIndex = 0;

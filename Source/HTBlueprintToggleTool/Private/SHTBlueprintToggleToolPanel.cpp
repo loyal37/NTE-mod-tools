@@ -22,6 +22,7 @@
 #include "Framework/Notifications/NotificationManager.h"
 #include "GameFramework/SaveGame.h"
 #include "HTBlueprintToggleGenerator.h"
+#include "HTMaterialVisibilityInput.h"
 #include "IContentBrowserSingleton.h"
 #include "IAssetTools.h"
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -686,8 +687,8 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 							MakeTextRow(
 								LOCTEXT("MaterialIDs", "Material ID(s)"),
 								SAssignNew(MaterialIDsBox, SEditableTextBox)
-								.HintText(LOCTEXT("MaterialIDsHint", "Single: 16    Cycle: 13,20    Group cycle: 1+2,3+4"))
-								.ToolTipText(LOCTEXT("MaterialIDsTooltip", "Separate states with commas and join materials in the same state with +. Example: 1+2,3+4 cycles group 1, group 2, then hides all.")))
+								.HintText(LOCTEXT("MaterialIDsHint", "Groups only: 5+6;8+10+12    With hide-all: 5+6,8+10+12"))
+								.ToolTipText(LOCTEXT("MaterialIDsTooltip", "Join IDs in a group with +. Separate groups with ; or Chinese semicolons to cycle only those groups; group sizes may differ. Commas add a final hide-all state. Example: 5+6;8+10+12 has two states.")))
 						]
 						+ SVerticalBox::Slot()
 						.AutoHeight()
@@ -713,11 +714,13 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 								{
 									TArray<FHTMaterialVisibilityGroup> Groups;
 									FString ParseError;
-									return ParseMaterialVisibilityGroups(Groups, ParseError) ? Groups.Num() : 0;
+									return ParseMaterialVisibilityGroups(Groups, ParseError)
+										? Groups.Num() - (HTMaterialVisibilityInput::IsGroupCycle(HTTogglePanel::TextBoxString(MaterialIDsBox)) ? 1 : 0)
+										: 0;
 								})
 								.Delta(1)
 								.Value(0)
-								.ToolTipText(LOCTEXT("InitialStateTooltip", "Default state used when this SaveGame slot does not exist. State order is unchanged and the hide-all state remains last."))
+								.ToolTipText(LOCTEXT("InitialStateTooltip", "Default state used when this SaveGame slot does not exist. Groups are numbered from 0. Semicolon cycles have no hide-all state; comma cycles keep hide-all last."))
 							]
 						]
 					]
@@ -2724,75 +2727,7 @@ bool SHTBlueprintToggleToolPanel::SyncBlueprintPathsFromCharacterFolder()
 
 bool SHTBlueprintToggleToolPanel::ParseMaterialVisibilityGroups(TArray<FHTMaterialVisibilityGroup>& OutGroups, FString& OutError) const
 {
-	OutGroups.Reset();
-
-	FString RawValue = HTTogglePanel::TextBoxString(MaterialIDsBox);
-	RawValue.TrimStartAndEndInline();
-	RawValue.ReplaceInline(TEXT("\uFF0B"), TEXT("+"));
-	RawValue.ReplaceInline(TEXT("\uFF0C"), TEXT(","));
-	RawValue.ReplaceInline(TEXT("\u3001"), TEXT(","));
-	RawValue.ReplaceInline(TEXT("\uFF1B"), TEXT(";"));
-
-	if (RawValue.IsEmpty())
-	{
-		OutError = TEXT("Enter at least one Material ID. Examples: 16, 13,20, 13+20, or 1+2,3+4.");
-		return false;
-	}
-
-	RawValue.ReplaceInline(TEXT(";"), TEXT(","));
-	RawValue.ReplaceInline(TEXT(" "), TEXT(","));
-	RawValue.ReplaceInline(TEXT("\r"), TEXT(","));
-	RawValue.ReplaceInline(TEXT("\n"), TEXT(","));
-	RawValue.ReplaceInline(TEXT("\t"), TEXT(","));
-	while (RawValue.ReplaceInline(TEXT(",,"), TEXT(",")) > 0)
-	{
-	}
-	RawValue.ReplaceInline(TEXT(",+"), TEXT("+"));
-	RawValue.ReplaceInline(TEXT("+,"), TEXT("+"));
-
-	TSet<int32> UsedMaterialIDs;
-	TArray<FString> GroupParts;
-	RawValue.ParseIntoArray(GroupParts, TEXT(","), false);
-	for (int32 GroupIndex = 0; GroupIndex < GroupParts.Num(); ++GroupIndex)
-	{
-		FString GroupText = GroupParts[GroupIndex];
-		GroupText.TrimStartAndEndInline();
-		if (GroupText.IsEmpty())
-		{
-			OutError = FString::Printf(TEXT("Material group %d is empty."), GroupIndex + 1);
-			return false;
-		}
-
-		FHTMaterialVisibilityGroup& Group = OutGroups.AddDefaulted_GetRef();
-		TArray<FString> MaterialParts;
-		GroupText.ParseIntoArray(MaterialParts, TEXT("+"), false);
-		for (FString MaterialPart : MaterialParts)
-		{
-			MaterialPart.TrimStartAndEndInline();
-			int32 MaterialID = INDEX_NONE;
-			if (MaterialPart.IsEmpty() || !LexTryParseString(MaterialID, *MaterialPart) || MaterialID < 0)
-			{
-				OutError = FString::Printf(TEXT("Invalid Material ID in group %d: %s"), GroupIndex + 1, *MaterialPart);
-				return false;
-			}
-			if (UsedMaterialIDs.Contains(MaterialID))
-			{
-				OutError = FString::Printf(TEXT("Material ID %d appears more than once."), MaterialID);
-				return false;
-			}
-
-			UsedMaterialIDs.Add(MaterialID);
-			Group.MaterialIDs.Add(MaterialID);
-		}
-	}
-
-	if (OutGroups.Num() == 0)
-	{
-		OutError = TEXT("Enter at least one valid Material ID.");
-		return false;
-	}
-
-	return true;
+	return HTMaterialVisibilityInput::Parse(HTTogglePanel::TextBoxString(MaterialIDsBox), OutGroups, OutError);
 }
 
 bool SHTBlueprintToggleToolPanel::ParseTextureMaterialSlots(TArray<int32>& OutMaterialSlots, FString& OutError) const
@@ -2993,7 +2928,7 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 		}
 
 		const int32 InitialState = InitialStateSpinBox.IsValid() ? InitialStateSpinBox->GetValue() : 0;
-		const int32 StateCount = MaterialVisibilityGroups.Num() + 1;
+		const int32 StateCount = MaterialVisibilityGroups.Num() + (HTMaterialVisibilityInput::IsGroupCycle(TextBoxString(MaterialIDsBox)) ? 0 : 1);
 		if (InitialState < 0 || InitialState >= StateCount)
 		{
 			ShowPanelError(FText::Format(
@@ -3098,6 +3033,7 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	Params.MaterialID = MaterialIDs.Num() > 0 ? MaterialIDs[0] : 0;
 	Params.bToggleMaterialIDsTogether = MaterialVisibilityGroups.Num() == 1 && MaterialVisibilityGroups[0].MaterialIDs.Num() > 1;
 	Params.MaterialVisibilityGroups = MaterialVisibilityGroups;
+	Params.bIncludeHiddenMaterialState = !HTMaterialVisibilityInput::IsGroupCycle(TextBoxString(MaterialIDsBox));
 	Params.InitialState = ToggleMode == EHTBlueprintToggleMode::MaterialSection && InitialStateSpinBox.IsValid()
 		? InitialStateSpinBox->GetValue()
 		: 0;
