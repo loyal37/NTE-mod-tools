@@ -27,6 +27,7 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Materials/MaterialInterface.h"
+#include "MaterialTypes.h"
 #include "Misc/PackageName.h"
 #include "Misc/ObjectThumbnail.h"
 #include "Misc/ConfigCacheIni.h"
@@ -498,7 +499,12 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 				.Padding(0, 0, 0, 12)
 				[
 					SNew(STextBlock)
-					.Text(LOCTEXT("Subtitle", "Generate material visibility or multi-slot, multi-texture toggle nodes. Save Variable is derived from Anim Variable; Save Slot also includes the character name."))
+					.Text_Lambda([this]()
+					{
+						return ToggleMode == EHTBlueprintToggleMode::TextureChannelTuner
+							? LOCTEXT("TextureTunerSubtitle", "Analyze a material to find all matching slots and its LightMap/ID_Tex textures. Tuner Name is filled automatically.")
+							: LOCTEXT("Subtitle", "Generate material visibility or multi-slot, multi-texture toggle nodes. Save Variable is derived from Anim Variable; Save Slot also includes the character name.");
+					})
 					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 					.AutoWrapText(true)
 				]
@@ -530,6 +536,8 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						.Text(LOCTEXT("TextureMode", "Texture switch"))
 						+ SSegmentedControl<EHTBlueprintToggleMode>::Slot(EHTBlueprintToggleMode::MaterialInterface)
 						.Text(LOCTEXT("MaterialInterfaceMode", "Material switch"))
+						+ SSegmentedControl<EHTBlueprintToggleMode>::Slot(EHTBlueprintToggleMode::TextureChannelTuner)
+						.Text(LOCTEXT("TextureChannelTunerMode", "RGB tuner"))
 					]
 					+ SHorizontalBox::Slot()
 					.AutoWidth()
@@ -594,21 +602,57 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 				.AutoHeight()
 				.Padding(0, 0, 0, 6)
 				[
-					MakeTextRow(
-						LOCTEXT("ToggleVar", "Anim Variable"),
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					[
+						SNew(SBox)
+						.WidthOverride(150)
+						[
+							SNew(STextBlock)
+							.Text_Lambda([this]()
+							{
+								return ToggleMode == EHTBlueprintToggleMode::TextureChannelTuner
+									? LOCTEXT("TextureTunerName", "Tuner Name")
+									: LOCTEXT("ToggleVar", "Anim Variable");
+							})
+						]
+					]
+					+ SHorizontalBox::Slot()
+					.FillWidth(1.0f)
+					[
 						SAssignNew(ToggleVariableBox, SEditableTextBox)
-						.HintText(LOCTEXT("ToggleVarHint", "Example: Glove"))
-						.ToolTipText(LOCTEXT("ToggleVarTooltip", "Save Variable will be AnimVariable + Save. Save Slot will be AnimVariable + character name.")))
+						.HintText_Lambda([this]()
+						{
+							return ToggleMode == EHTBlueprintToggleMode::TextureChannelTuner
+								? LOCTEXT("TextureTunerNameHint", "Filled automatically after material analysis")
+								: LOCTEXT("ToggleVarHint", "Example: Glove");
+						})
+						.ToolTipText_Lambda([this]()
+						{
+							return ToggleMode == EHTBlueprintToggleMode::TextureChannelTuner
+								? LOCTEXT("TextureTunerNameTooltip", "Internal identifier for generated tuner variables and events. Material analysis fills it automatically.")
+								: LOCTEXT("ToggleVarTooltip", "Save Variable will be AnimVariable + Save. Save Slot will be AnimVariable + character name.");
+						})
+					]
 				]
 
 				+ SVerticalBox::Slot()
 				.AutoHeight()
 				.Padding(0, 0, 0, 6)
 				[
-					MakeTextRow(
-						LOCTEXT("KeyName", "Key"),
-						SAssignNew(KeyNameBox, SEditableTextBox)
-						.HintText(LOCTEXT("KeyHint", "Examples: 9, =, ctrl 6, shift 6, alt 6")))
+					SNew(SBox)
+					.Visibility_Lambda([this]()
+					{
+						return ToggleMode == EHTBlueprintToggleMode::TextureChannelTuner ? EVisibility::Collapsed : EVisibility::Visible;
+					})
+					[
+						MakeTextRow(
+							LOCTEXT("KeyName", "Key"),
+							SAssignNew(KeyNameBox, SEditableTextBox)
+							.HintText(LOCTEXT("KeyHint", "Examples: 9, =, ctrl 6, shift 6, alt 6")))
+					]
 				]
 
 				+ SVerticalBox::Slot()
@@ -624,6 +668,10 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						if (ToggleMode == EHTBlueprintToggleMode::MaterialInterface)
 						{
 							return 2;
+						}
+						if (ToggleMode == EHTBlueprintToggleMode::TextureChannelTuner)
+						{
+							return 3;
 						}
 						return 0;
 					})
@@ -748,6 +796,63 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 						.AutoHeight()
 						[
 							SAssignNew(MaterialInterfaceRowsBox, SVerticalBox)
+						]
+					]
+
+					+ SWidgetSwitcher::Slot()
+					[
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 6)
+						[
+							MakeMaterialSlotsRow(TextureTunerSlotsBox)
+						]
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 6)
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.VAlign(VAlign_Center)
+							[
+								SNew(SBox).WidthOverride(150)
+								[
+									SNew(STextBlock).Text(LOCTEXT("TextureTunerSourceMaterial", "Source Material"))
+								]
+							]
+							+ SHorizontalBox::Slot()
+							.FillWidth(1.0f)
+							[
+								SNew(SObjectPropertyEntryBox)
+								.AllowedClass(UMaterialInterface::StaticClass())
+								.AllowClear(false)
+								.DisplayThumbnail(true)
+								.ObjectPath_Lambda([this]() { return TextureTunerSourceMaterialPath; })
+								.OnObjectChanged(this, &SHTBlueprintToggleToolPanel::OnTextureTunerSourceMaterialChanged)
+							]
+						]
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 6)
+						[
+							MakeTextureTunerTextureRow(LOCTEXT("TextureTunerLightMap", "LightMap (M map)"), true)
+						]
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(0, 0, 0, 6)
+						[
+							MakeTextureTunerTextureRow(LOCTEXT("TextureTunerIDTex", "ID_Tex"), false)
+						]
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						.Padding(150, 2, 0, 0)
+						[
+							SNew(STextBlock)
+							.Text(LOCTEXT("TextureTunerWarning", "RGB values are linear channel multipliers. 1.0 keeps the original value. ID_Tex.R may change material-region classification."))
+							.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+							.AutoWrapText(true)
 						]
 					]
 				]
@@ -1181,6 +1286,43 @@ TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeMaterialPickerRow()
 		];
 }
 
+TSharedRef<SWidget> SHTBlueprintToggleToolPanel::MakeTextureTunerTextureRow(const FText& Label, const bool bLightMap)
+{
+	TSharedPtr<SCheckBox>& CheckBox = bLightMap ? TuneLightMapCheckBox : TuneIDTextureCheckBox;
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		[
+			SAssignNew(CheckBox, SCheckBox)
+			.IsChecked(ECheckBoxState::Unchecked)
+		]
+		+ SHorizontalBox::Slot()
+		.AutoWidth()
+		.VAlign(VAlign_Center)
+		.Padding(6, 0, 8, 0)
+		[
+			SNew(SBox).WidthOverride(128)
+			[
+				SNew(STextBlock).Text(Label)
+			]
+		]
+		+ SHorizontalBox::Slot()
+		.FillWidth(1.0f)
+		[
+			SNew(SObjectPropertyEntryBox)
+			.AllowedClass(UTexture2D::StaticClass())
+			.AllowClear(false)
+			.DisplayThumbnail(true)
+			.OnShouldFilterAsset(this, &SHTBlueprintToggleToolPanel::ShouldFilterTextureAsset)
+			.ObjectPath_Lambda([this, bLightMap]()
+			{
+				return bLightMap ? TextureTunerLightMapPath : TextureTunerIDTexturePath;
+			})
+			.OnObjectChanged(this, &SHTBlueprintToggleToolPanel::OnTextureTunerTextureChanged, bLightMap)
+		];
+}
+
 bool SHTBlueprintToggleToolPanel::BuildMaterialSlotGroups(FString& OutMeshName, FString& OutError)
 {
 	MaterialSlotGroups.Reset();
@@ -1395,6 +1537,34 @@ FReply SHTBlueprintToggleToolPanel::OnSelectMaterialGroupClicked(const int32 Gro
 	}
 
 	const FString SlotList = HTTogglePanel::JoinSlotIndices(Group.SlotIndices);
+	if (ToggleMode == EHTBlueprintToggleMode::TextureChannelTuner)
+	{
+		TextureTunerSourceMaterialPath = Material->GetPathName();
+		if (TextureTunerSlotsBox.IsValid())
+		{
+			TextureTunerSlotsBox->SetText(FText::FromString(SlotList));
+		}
+		PopulateTextureTunerFromMaterial(Material);
+		if (ToggleVariableBox.IsValid())
+		{
+			ToggleVariableBox->SetText(FText::FromString(Material->GetName() + TEXT("_Tuner")));
+		}
+
+		const FText SelectedText = FText::Format(
+			LOCTEXT("TextureTunerMaterialSelected", "Selected {0}; slots: {1}. LightMap and ID_Tex were detected from the effective material parameters."),
+			FText::FromString(Material->GetName()),
+			FText::FromString(SlotList));
+		if (StatusText.IsValid())
+		{
+			StatusText->SetText(SelectedText);
+		}
+		if (MaterialAnalysisWindow.IsValid())
+		{
+			MaterialAnalysisWindow.Pin()->RequestDestroyWindow();
+		}
+		return FReply::Handled();
+	}
+
 	if (ToggleMode == EHTBlueprintToggleMode::Texture)
 	{
 		CaptureTextureMaterialGroupRows();
@@ -2154,6 +2324,7 @@ FString SHTBlueprintToggleToolPanel::GetSourceMaterialPath() const
 void SHTBlueprintToggleToolPanel::OnToggleModeChanged(EHTBlueprintToggleMode NewMode)
 {
 	ToggleMode = NewMode;
+	Invalidate(EInvalidateWidgetReason::Layout);
 	if (ModeOptionsSwitcher.IsValid())
 	{
 		ModeOptionsSwitcher->Invalidate(EInvalidateWidgetReason::Layout);
@@ -2261,6 +2432,103 @@ void SHTBlueprintToggleToolPanel::OnMaterialInterfaceChanged(const FAssetData& A
 			return;
 		}
 		MaterialInterfacePaths[MaterialIndex] = AssetData.GetSoftObjectPath().ToString();
+	}
+}
+
+void SHTBlueprintToggleToolPanel::OnTextureTunerSourceMaterialChanged(const FAssetData& AssetData)
+{
+	if (!AssetData.IsValid())
+	{
+		return;
+	}
+
+	UMaterialInterface* Material = Cast<UMaterialInterface>(AssetData.GetAsset());
+	if (!Material)
+	{
+		ShowPanelError(LOCTEXT("InvalidTextureTunerMaterial", "Choose a valid Source Material."));
+		return;
+	}
+
+	TextureTunerSourceMaterialPath = AssetData.GetSoftObjectPath().ToString();
+	PopulateTextureTunerFromMaterial(Material);
+}
+
+void SHTBlueprintToggleToolPanel::OnTextureTunerTextureChanged(const FAssetData& AssetData, const bool bLightMap)
+{
+	if (!AssetData.IsValid())
+	{
+		return;
+	}
+	if (ShouldFilterTextureAsset(AssetData))
+	{
+		ShowPanelError(LOCTEXT("TextureTunerTextureOutsideCharacterFolder", "Choose a texture inside the selected Character Folder."));
+		return;
+	}
+
+	if (bLightMap)
+	{
+		TextureTunerLightMapPath = AssetData.GetSoftObjectPath().ToString();
+		if (TuneLightMapCheckBox.IsValid())
+		{
+			TuneLightMapCheckBox->SetIsChecked(ECheckBoxState::Checked);
+		}
+	}
+	else
+	{
+		TextureTunerIDTexturePath = AssetData.GetSoftObjectPath().ToString();
+		if (TuneIDTextureCheckBox.IsValid())
+		{
+			TuneIDTextureCheckBox->SetIsChecked(ECheckBoxState::Checked);
+		}
+	}
+}
+
+void SHTBlueprintToggleToolPanel::PopulateTextureTunerFromMaterial(UMaterialInterface* Material)
+{
+	if (!Material)
+	{
+		return;
+	}
+
+	auto ReadTextureParameter = [Material](const FName ParameterName) -> UTexture*
+	{
+		UTexture* Texture = nullptr;
+		Material->GetTextureParameterValue(FMaterialParameterInfo(ParameterName), Texture);
+		return Texture;
+	};
+
+	if (UTexture* LightMap = ReadTextureParameter(TEXT("LightMap")))
+	{
+		TextureTunerLightMapPath = LightMap->GetPathName();
+		if (TuneLightMapCheckBox.IsValid())
+		{
+			TuneLightMapCheckBox->SetIsChecked(ECheckBoxState::Checked);
+		}
+	}
+	else
+	{
+		TextureTunerLightMapPath.Empty();
+		if (TuneLightMapCheckBox.IsValid())
+		{
+			TuneLightMapCheckBox->SetIsChecked(ECheckBoxState::Unchecked);
+		}
+	}
+
+	if (UTexture* IDTexture = ReadTextureParameter(TEXT("ID_Tex")))
+	{
+		TextureTunerIDTexturePath = IDTexture->GetPathName();
+		if (TuneIDTextureCheckBox.IsValid())
+		{
+			TuneIDTextureCheckBox->SetIsChecked(ECheckBoxState::Checked);
+		}
+	}
+	else
+	{
+		TextureTunerIDTexturePath.Empty();
+		if (TuneIDTextureCheckBox.IsValid())
+		{
+			TuneIDTextureCheckBox->SetIsChecked(ECheckBoxState::Unchecked);
+		}
 	}
 }
 
@@ -2666,6 +2934,10 @@ bool SHTBlueprintToggleToolPanel::ParseTextureMaterialGroups(TArray<FHTTextureMa
 
 TSharedPtr<SEditableTextBox> SHTBlueprintToggleToolPanel::GetActiveMaterialSlotsBox() const
 {
+	if (ToggleMode == EHTBlueprintToggleMode::TextureChannelTuner)
+	{
+		return TextureTunerSlotsBox;
+	}
 	return MaterialInterfaceSlotsBox;
 }
 
@@ -2697,7 +2969,7 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 		return FReply::Handled();
 	}
 
-	if (KeyName.IsEmpty())
+	if (KeyName.IsEmpty() && ToggleMode != EHTBlueprintToggleMode::TextureChannelTuner)
 	{
 		ShowPanelError(LOCTEXT("MissingKey", "请填写 Key。"));
 		return FReply::Handled();
@@ -2778,6 +3050,38 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 			}
 		}
 	}
+	else if (ToggleMode == EHTBlueprintToggleMode::TextureChannelTuner)
+	{
+		FString MaterialSlotError;
+		if (!ParseTextureMaterialSlots(TextureMaterialSlots, MaterialSlotError))
+		{
+			ShowPanelError(FText::FromString(MaterialSlotError));
+			return FReply::Handled();
+		}
+		if (TextureTunerSourceMaterialPath.TrimStartAndEnd().IsEmpty())
+		{
+			ShowPanelError(LOCTEXT("TextureTunerMissingMaterial", "Analyze and choose a Source Material first."));
+			return FReply::Handled();
+		}
+
+		const bool bTuneLightMap = IsChecked(TuneLightMapCheckBox);
+		const bool bTuneIDTexture = IsChecked(TuneIDTextureCheckBox);
+		if (!bTuneLightMap && !bTuneIDTexture)
+		{
+			ShowPanelError(LOCTEXT("TextureTunerNoMaps", "Enable LightMap, ID_Tex, or both."));
+			return FReply::Handled();
+		}
+		if (bTuneLightMap && TextureTunerLightMapPath.TrimStartAndEnd().IsEmpty())
+		{
+			ShowPanelError(LOCTEXT("TextureTunerMissingLightMap", "Choose the material's LightMap texture."));
+			return FReply::Handled();
+		}
+		if (bTuneIDTexture && TextureTunerIDTexturePath.TrimStartAndEnd().IsEmpty())
+		{
+			ShowPanelError(LOCTEXT("TextureTunerMissingIDTex", "Choose the material's ID_Tex texture."));
+			return FReply::Handled();
+		}
+	}
 
 	FHTBlueprintToggleGeneratorParams Params;
 	Params.Mode = ToggleMode;
@@ -2801,13 +3105,19 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	Params.LODIndex = 0;
 	Params.MaterialElementIndex = TextureMaterialSlots.Num() > 0 ? TextureMaterialSlots[0] : 0;
 	Params.MaterialElementIndices = TextureMaterialSlots;
-	Params.SourceMaterialPath = TextureMaterialGroupsForGeneration.Num() > 0 ? TextureMaterialGroupsForGeneration[0].SourceMaterialPath : SourceMaterialPath;
+	Params.SourceMaterialPath = ToggleMode == EHTBlueprintToggleMode::TextureChannelTuner
+		? TextureTunerSourceMaterialPath
+		: (TextureMaterialGroupsForGeneration.Num() > 0 ? TextureMaterialGroupsForGeneration[0].SourceMaterialPath : SourceMaterialPath);
 	Params.TextureMaterialSlotGroups = TextureMaterialGroupsForGeneration;
 	Params.TextureParameterName = TextBoxString(TextureParameterBox).TrimStartAndEnd();
 	Params.TexturePaths = TextureMaterialGroupsForGeneration.Num() > 0 ? TextureMaterialGroupsForGeneration[0].TexturePaths : TArray<FString>();
 	Params.MaterialInterfacePaths = MaterialInterfacePaths;
-	Params.bGenerateInitializeGraph = IsChecked(InitGraphCheckBox);
-	Params.bGenerateUpdateGraph = IsChecked(UpdateGraphCheckBox);
+	Params.bTuneLightMap = IsChecked(TuneLightMapCheckBox);
+	Params.bTuneIDTexture = IsChecked(TuneIDTextureCheckBox);
+	Params.LightMapTexturePath = TextureTunerLightMapPath;
+	Params.IDTexturePath = TextureTunerIDTexturePath;
+	Params.bGenerateInitializeGraph = ToggleMode == EHTBlueprintToggleMode::TextureChannelTuner || IsChecked(InitGraphCheckBox);
+	Params.bGenerateUpdateGraph = ToggleMode != EHTBlueprintToggleMode::TextureChannelTuner && IsChecked(UpdateGraphCheckBox);
 	Params.bSaveAssets = IsChecked(SaveAssetsCheckBox);
 
 	FHTBlueprintToggleGeneratorResult Result = FHTBlueprintToggleGenerator::Generate(Params);

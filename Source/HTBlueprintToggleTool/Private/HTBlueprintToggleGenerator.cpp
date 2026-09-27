@@ -1,5 +1,6 @@
 #include "HTBlueprintToggleGenerator.h"
 
+#include "Algo/Unique.h"
 #include "Animation/AnimInstance.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SkinnedMeshComponent.h"
@@ -9,14 +10,18 @@
 #include "EdGraphNode_Comment.h"
 #include "EdGraphSchema_K2.h"
 #include "EdGraphSchema_K2_Actions.h"
+#include "Engine/Canvas.h"
 #include "Engine/Blueprint.h"
 #include "Engine/Texture.h"
+#include "Engine/Texture2D.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "FileHelpers.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SaveGame.h"
 #include "InputCoreTypes.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_CommutativeAssociativeBinaryOperator.h"
+#include "K2Node_CustomEvent.h"
 #include "K2Node_DynamicCast.h"
 #include "K2Node_Event.h"
 #include "K2Node_ExecutionSequence.h"
@@ -26,10 +31,13 @@
 #include "K2Node_VariableSet.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetMathLibrary.h"
+#include "Kismet/KismetRenderingLibrary.h"
+#include "Kismet/KismetSystemLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "MaterialTypes.h"
 #include "Misc/PackageName.h"
 #include "ScopedTransaction.h"
 #include "UObject/Package.h"
@@ -594,6 +602,48 @@ namespace HTToggleGenerator
 		return true;
 	}
 
+	static bool EnsureStructVariable(
+		UBlueprint* Blueprint,
+		const FName VariableName,
+		UScriptStruct* StructType,
+		const FString& DefaultValue,
+		FHTBlueprintToggleGeneratorResult& Result,
+		const FString& Label)
+	{
+		if (!Blueprint || !StructType)
+		{
+			return false;
+		}
+
+		const int32 VariableIndex = FBlueprintEditorUtils::FindNewVariableIndex(Blueprint, VariableName);
+		if (VariableIndex != INDEX_NONE)
+		{
+			FBPVariableDescription& Existing = Blueprint->NewVariables[VariableIndex];
+			if (Existing.VarType.PinCategory != UEdGraphSchema_K2::PC_Struct || Existing.VarType.PinSubCategoryObject.Get() != StructType)
+			{
+				Result.Errors.Add(FString::Printf(TEXT("%s variable has the wrong type: %s"), *Label, *VariableName.ToString()));
+				return false;
+			}
+			if (!DefaultValue.IsEmpty() && Existing.DefaultValue.IsEmpty())
+			{
+				Existing.DefaultValue = DefaultValue;
+				FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+			}
+			return true;
+		}
+
+		FEdGraphPinType PinType;
+		PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
+		PinType.PinSubCategoryObject = StructType;
+		if (!FBlueprintEditorUtils::AddMemberVariable(Blueprint, VariableName, PinType, DefaultValue))
+		{
+			Result.Errors.Add(FString::Printf(TEXT("Failed to add %s variable: %s"), *Label, *VariableName.ToString()));
+			return false;
+		}
+		Result.Messages.Add(FString::Printf(TEXT("Added %s variable: %s"), *Label, *VariableName.ToString()));
+		return true;
+	}
+
 	static const UEdGraphSchema_K2* GetSchema()
 	{
 		return GetDefault<UEdGraphSchema_K2>();
@@ -770,6 +820,49 @@ namespace HTToggleGenerator
 		}
 	}
 
+	static TArray<UEdGraphNode*> GetNodesUnderComment(UEdGraphNode_Comment* Comment)
+	{
+		TArray<UEdGraphNode*> Nodes;
+		if (!Comment)
+		{
+			return Nodes;
+		}
+		for (UObject* Object : Comment->GetNodesUnderComment())
+		{
+			if (UEdGraphNode* Node = Cast<UEdGraphNode>(Object))
+			{
+				Nodes.AddUnique(Node);
+			}
+		}
+		return Nodes;
+	}
+
+	static void RemoveTextureTunerGroup(UEdGraph* Graph, const FName TunerName)
+	{
+		if (!Graph)
+		{
+			return;
+		}
+		const FString Prefix = FString::Printf(TEXT("HT Texture Tuner - %s;"), *TunerName.ToString());
+		TArray<UEdGraphNode_Comment*> Comments;
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (UEdGraphNode_Comment* Comment = Cast<UEdGraphNode_Comment>(Node); Comment && Comment->NodeComment.StartsWith(Prefix))
+			{
+				Comments.Add(Comment);
+			}
+		}
+		for (UEdGraphNode_Comment* Comment : Comments)
+		{
+			for (UEdGraphNode* Node : GetNodesUnderComment(Comment))
+			{
+				Node->BreakAllNodeLinks();
+				Graph->RemoveNode(Node);
+			}
+			Graph->RemoveNode(Comment);
+		}
+	}
+
 	static void SetDefaultValue(UEdGraphPin* Pin, const FString& Value)
 	{
 		if (Pin)
@@ -802,6 +895,18 @@ namespace HTToggleGenerator
 			[Function](UK2Node_CallFunction* NewNode)
 			{
 				NewNode->SetFromFunction(Function);
+			});
+	}
+
+	static UK2Node_CustomEvent* SpawnCustomEvent(UEdGraph* Graph, const FName EventName, const FVector2D Position)
+	{
+		return FEdGraphSchemaAction_K2NewNode::SpawnNode<UK2Node_CustomEvent>(
+			Graph,
+			Position,
+			EK2NewNodeFlags::None,
+			[EventName](UK2Node_CustomEvent* Node)
+			{
+				Node->CustomFunctionName = EventName;
 			});
 	}
 
@@ -1807,6 +1912,455 @@ namespace HTToggleGenerator
 		CommentNodes.Append(MaterialNodes);
 		AddNodesToComment(Comment, CommentNodes);
 	}
+
+	struct FTextureTunerMapSpec
+	{
+		FName ParameterName;
+		UTexture2D* PreviewTexture = nullptr;
+		FName SourceVariable;
+		FName RenderTargetVariable;
+		FName AdjustmentVariable;
+		FName ApplyEvent;
+		FName ResetEvent;
+		FName ExportEvent;
+		FString ExportFileName;
+	};
+
+	static bool BuildTextureTunerBlendColors(
+		UEdGraph* Graph,
+		UEdGraphPin* Adjustment,
+		const FVector2D Base,
+		UEdGraphPin*& OutScale,
+		UEdGraphPin*& OutBias,
+		FHTBlueprintToggleGeneratorResult& Result)
+	{
+		UK2Node_CallFunction* Break = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("BreakColor"), Base, Result);
+		UK2Node_CallFunction* Scale = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("MakeColor"), Base + FVector2D(1100, 0), Result);
+		UK2Node_CallFunction* Bias = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("MakeColor"), Base + FVector2D(1100, 360), Result);
+		if (!Break || !Scale || !Bias)
+		{
+			return false;
+		}
+		Connect(Adjustment, FindAnyPin(Break, TEXT("InColor")), Result, TEXT("Adjustment -> RGB components"));
+		SetDefaultValue(FindAnyPin(Scale, TEXT("A")), TEXT("1.0"));
+		SetDefaultValue(FindAnyPin(Bias, TEXT("A")), TEXT("1.0"));
+		static const FName Channels[] = { TEXT("R"), TEXT("G"), TEXT("B") };
+		for (int32 Channel = 0; Channel < 3; ++Channel)
+		{
+			const FVector2D Position = Base + FVector2D(240, Channel * 220);
+			UK2Node_CallFunction* Clamp = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("FClamp"), Position, Result);
+			UK2Node_CallFunction* Abs = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("Abs"), Position + FVector2D(250, 0), Result);
+			UK2Node_CallFunction* OneMinus = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("Subtract_DoubleDouble"), Position + FVector2D(500, 0), Result);
+			UK2Node_CallFunction* Positive = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("FMax"), Position + FVector2D(500, 100), Result);
+			if (!Clamp || !Abs || !OneMinus || !Positive)
+			{
+				return false;
+			}
+			// Signed adjustment t: source * (1 - abs(t)) + max(t, 0).
+			// t=-1 -> 0, t=0 -> original, t=1 -> 1, including originally black pixels.
+			SetDefaultValue(FindAnyPin(Clamp, TEXT("Min")), TEXT("-1.0"));
+			SetDefaultValue(FindAnyPin(Clamp, TEXT("Max")), TEXT("1.0"));
+			SetDefaultValue(FindAnyPin(OneMinus, TEXT("A")), TEXT("1.0"));
+			SetDefaultValue(FindAnyPin(Positive, TEXT("B")), TEXT("0.0"));
+			Connect(FindAnyPin(Break, Channels[Channel]), FindAnyPin(Clamp, TEXT("Value")), Result, TEXT("Channel -> clamp adjustment"));
+			Connect(FindAnyPin(Clamp, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(Abs, TEXT("A")), Result, TEXT("Clamped adjustment -> absolute value"));
+			Connect(FindAnyPin(Abs, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(OneMinus, TEXT("B")), Result, TEXT("Absolute adjustment -> source weight"));
+			Connect(FindAnyPin(Clamp, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(Positive, TEXT("A")), Result, TEXT("Clamped adjustment -> white weight"));
+			Connect(FindAnyPin(OneMinus, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(Scale, Channels[Channel]), Result, TEXT("Source weight -> draw tint"));
+			Connect(FindAnyPin(Positive, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(Bias, Channels[Channel]), Result, TEXT("White weight -> additive tint"));
+		}
+		OutScale = FindAnyPin(Scale, UEdGraphSchema_K2::PN_ReturnValue);
+		OutBias = FindAnyPin(Bias, UEdGraphSchema_K2::PN_ReturnValue);
+		return Result.Errors.IsEmpty();
+	}
+
+	static void GenerateTextureTunerApplyGraph(
+		UEdGraph* Graph,
+		const FTextureTunerMapSpec& Map,
+		const TArray<FName>& MIDVariables,
+		const FVector2D Base,
+		TArray<UEdGraphNode*>& OutNodes,
+		FHTBlueprintToggleGeneratorResult& Result)
+	{
+		const int32 FirstNodeIndex = Graph->Nodes.Num();
+		UK2Node_CustomEvent* Event = SpawnCustomEvent(Graph, Map.ApplyEvent, Base);
+		UK2Node_VariableGet* GetRT = SpawnVariableGet(Graph, Map.RenderTargetVariable, nullptr, Base + FVector2D(260, 220));
+		UK2Node_VariableGet* GetSource = SpawnVariableGet(Graph, Map.SourceVariable, nullptr, Base + FVector2D(520, 360));
+		UK2Node_VariableGet* GetAdjustment = SpawnVariableGet(Graph, Map.AdjustmentVariable, nullptr, Base + FVector2D(520, 500));
+		UK2Node_CallFunction* BeginDraw = SpawnCall(Graph, UKismetRenderingLibrary::StaticClass(), TEXT("BeginDrawCanvasToRenderTarget"), Base + FVector2D(260, 0), Result);
+		UK2Node_CallFunction* DrawTexture = SpawnCall(Graph, UCanvas::StaticClass(), TEXT("K2_DrawTexture"), Base + FVector2D(760, 0), Result);
+		UK2Node_CallFunction* DrawWhite = SpawnCall(Graph, UCanvas::StaticClass(), TEXT("K2_DrawTexture"), Base + FVector2D(1120, 0), Result);
+		UK2Node_CallFunction* EndDraw = SpawnCall(Graph, UKismetRenderingLibrary::StaticClass(), TEXT("EndDrawCanvasToRenderTarget"), Base + FVector2D(1480, 0), Result);
+		if (!Event || !GetRT || !GetSource || !GetAdjustment || !BeginDraw || !DrawTexture || !DrawWhite || !EndDraw)
+		{
+			return;
+		}
+
+		UEdGraphPin* Scale = nullptr;
+		UEdGraphPin* Bias = nullptr;
+		if (!BuildTextureTunerBlendColors(Graph, FindAnyPin(GetAdjustment, Map.AdjustmentVariable), Base + FVector2D(800, 360), Scale, Bias, Result))
+		{
+			return;
+		}
+		for (UK2Node_CallFunction* Draw : { DrawTexture, DrawWhite })
+		{
+			SetDefaultValue(FindAnyPin(Draw, TEXT("ScreenPosition")), TEXT("(X=0.000000,Y=0.000000)"));
+			SetDefaultValue(FindAnyPin(Draw, TEXT("CoordinatePosition")), TEXT("(X=0.000000,Y=0.000000)"));
+			SetDefaultValue(FindAnyPin(Draw, TEXT("CoordinateSize")), TEXT("(X=1.000000,Y=1.000000)"));
+			SetDefaultValue(FindAnyPin(Draw, TEXT("Rotation")), TEXT("0.0"));
+			Connect(FindAnyPin(BeginDraw, TEXT("Size")), FindAnyPin(Draw, TEXT("ScreenSize")), Result, TEXT("Full render target size -> Draw Texture"));
+			Connect(FindAnyPin(BeginDraw, TEXT("Canvas")), FindSelfPin(Draw), Result, TEXT("Canvas -> Draw Texture"));
+		}
+		SetDefaultValue(FindAnyPin(DrawTexture, TEXT("BlendMode")), TEXT("BLEND_Opaque"));
+		// A null Canvas texture uses the engine's white texture. No new material/asset is needed.
+		// Additive Canvas blending only writes RGB, preserving the source alpha from the first pass.
+		SetDefaultValue(FindAnyPin(DrawWhite, TEXT("BlendMode")), TEXT("BLEND_Additive"));
+
+		Connect(GetSchema()->FindExecutionPin(*Event, EGPD_Output), GetSchema()->FindExecutionPin(*BeginDraw, EGPD_Input), Result, TEXT("Texture tuner Apply -> Begin Draw"));
+		Connect(FindAnyPin(GetRT, Map.RenderTargetVariable), FindAnyPin(BeginDraw, TEXT("TextureRenderTarget")), Result, TEXT("Texture tuner RT -> Begin Draw"));
+		Connect(GetSchema()->FindExecutionPin(*BeginDraw, EGPD_Output), GetSchema()->FindExecutionPin(*DrawTexture, EGPD_Input), Result, TEXT("Begin Draw -> Draw Texture"));
+		Connect(FindAnyPin(GetSource, Map.SourceVariable), FindAnyPin(DrawTexture, TEXT("RenderTexture")), Result, TEXT("Original texture -> Draw Texture"));
+		Connect(Scale, FindAnyPin(DrawTexture, TEXT("RenderColor")), Result, TEXT("Original contribution -> opaque draw"));
+		Connect(Bias, FindAnyPin(DrawWhite, TEXT("RenderColor")), Result, TEXT("White contribution -> additive draw"));
+		Connect(GetSchema()->FindExecutionPin(*DrawTexture, EGPD_Output), GetSchema()->FindExecutionPin(*DrawWhite, EGPD_Input), Result, TEXT("Overwrite previous preview -> add white contribution"));
+		Connect(GetSchema()->FindExecutionPin(*DrawWhite, EGPD_Output), GetSchema()->FindExecutionPin(*EndDraw, EGPD_Input), Result, TEXT("Add white -> End Draw"));
+		Connect(FindAnyPin(BeginDraw, TEXT("Context")), FindAnyPin(EndDraw, TEXT("Context")), Result, TEXT("Draw context -> End Draw"));
+
+		UEdGraphPin* Exec = GetSchema()->FindExecutionPin(*EndDraw, EGPD_Output);
+		for (int32 Index = 0; Index < MIDVariables.Num(); ++Index)
+		{
+			const FVector2D NodePosition = Base + FVector2D(1820 + Index * 360, 0);
+			UK2Node_VariableGet* GetMID = SpawnVariableGet(Graph, MIDVariables[Index], nullptr, NodePosition + FVector2D(0, 220));
+			UK2Node_CallFunction* SetTexture = SpawnCall(Graph, UMaterialInstanceDynamic::StaticClass(), TEXT("SetTextureParameterValue"), NodePosition, Result);
+			if (!GetMID || !SetTexture)
+			{
+				return;
+			}
+			SetDefaultValue(FindAnyPin(SetTexture, TEXT("ParameterName")), Map.ParameterName.ToString());
+			Connect(Exec, GetSchema()->FindExecutionPin(*SetTexture, EGPD_Input), Result, TEXT("End Draw -> Set tuned texture"));
+			Connect(FindAnyPin(GetMID, MIDVariables[Index]), FindSelfPin(SetTexture), Result, TEXT("MID -> Set tuned texture"));
+			Connect(FindAnyPin(GetRT, Map.RenderTargetVariable), FindAnyPin(SetTexture, TEXT("Value")), Result, TEXT("RT -> texture parameter"));
+			Exec = GetSchema()->FindExecutionPin(*SetTexture, EGPD_Output);
+			OutNodes.Add(GetMID);
+			OutNodes.Add(SetTexture);
+		}
+
+		// Include any real-number conversion nodes inserted by the schema in regeneration cleanup.
+		for (int32 Index = FirstNodeIndex; Index < Graph->Nodes.Num(); ++Index)
+		{
+			OutNodes.AddUnique(Graph->Nodes[Index]);
+		}
+	}
+
+	static void GenerateTextureTunerResetGraph(
+		UEdGraph* Graph,
+		const FTextureTunerMapSpec& Map,
+		const TArray<FName>& MIDVariables,
+		const FVector2D Base,
+		TArray<UEdGraphNode*>& OutNodes,
+		FHTBlueprintToggleGeneratorResult& Result)
+	{
+		UK2Node_CustomEvent* Event = SpawnCustomEvent(Graph, Map.ResetEvent, Base);
+		UK2Node_VariableSet* SetAdjustment = SpawnVariableSet(Graph, Map.AdjustmentVariable, nullptr, Base + FVector2D(280, 0));
+		UK2Node_VariableGet* GetSource = SpawnVariableGet(Graph, Map.SourceVariable, nullptr, Base + FVector2D(560, 260));
+		if (!Event || !SetAdjustment || !GetSource)
+		{
+			return;
+		}
+		SetDefaultValue(FindAnyPin(SetAdjustment, Map.AdjustmentVariable), TEXT("(R=0.000000,G=0.000000,B=0.000000,A=1.000000)"));
+		Connect(GetSchema()->FindExecutionPin(*Event, EGPD_Output), GetSchema()->FindExecutionPin(*SetAdjustment, EGPD_Input), Result, TEXT("Texture tuner Reset -> neutral adjustment"));
+
+		UEdGraphPin* Exec = GetSchema()->FindExecutionPin(*SetAdjustment, EGPD_Output);
+		for (int32 Index = 0; Index < MIDVariables.Num(); ++Index)
+		{
+			const FVector2D NodePosition = Base + FVector2D(560 + Index * 360, 0);
+			UK2Node_VariableGet* GetMID = SpawnVariableGet(Graph, MIDVariables[Index], nullptr, NodePosition + FVector2D(0, 400));
+			UK2Node_CallFunction* SetTexture = SpawnCall(Graph, UMaterialInstanceDynamic::StaticClass(), TEXT("SetTextureParameterValue"), NodePosition, Result);
+			if (!GetMID || !SetTexture)
+			{
+				return;
+			}
+			SetDefaultValue(FindAnyPin(SetTexture, TEXT("ParameterName")), Map.ParameterName.ToString());
+			Connect(Exec, GetSchema()->FindExecutionPin(*SetTexture, EGPD_Input), Result, TEXT("Reset adjustment -> restore texture"));
+			Connect(FindAnyPin(GetMID, MIDVariables[Index]), FindSelfPin(SetTexture), Result, TEXT("MID -> restore texture"));
+			Connect(FindAnyPin(GetSource, Map.SourceVariable), FindAnyPin(SetTexture, TEXT("Value")), Result, TEXT("Original texture -> parameter"));
+			Exec = GetSchema()->FindExecutionPin(*SetTexture, EGPD_Output);
+			OutNodes.Add(GetMID);
+			OutNodes.Add(SetTexture);
+		}
+		OutNodes.Append({ Event, SetAdjustment, GetSource });
+	}
+
+	static void GenerateTextureTunerExportGraph(
+		UEdGraph* Graph,
+		const FTextureTunerMapSpec& Map,
+		const FVector2D Base,
+		TArray<UEdGraphNode*>& OutNodes,
+		FHTBlueprintToggleGeneratorResult& Result)
+	{
+		UK2Node_CustomEvent* Event = SpawnCustomEvent(Graph, Map.ExportEvent, Base);
+		UK2Node_VariableGet* GetRT = SpawnVariableGet(Graph, Map.RenderTargetVariable, nullptr, Base + FVector2D(260, 220));
+		UK2Node_CallFunction* GetSavedDirectory = SpawnCall(
+			Graph,
+			UKismetSystemLibrary::StaticClass(),
+			TEXT("GetProjectSavedDirectory"),
+			Base + FVector2D(260, 380),
+			Result);
+		UK2Node_CallFunction* Export = SpawnCall(
+			Graph,
+			UKismetRenderingLibrary::StaticClass(),
+			TEXT("ExportRenderTarget"),
+			Base + FVector2D(560, 0),
+			Result);
+		if (!Event || !GetRT || !GetSavedDirectory || !Export)
+		{
+			return;
+		}
+
+		SetDefaultValue(FindAnyPin(Export, TEXT("FileName")), Map.ExportFileName);
+		Connect(GetSchema()->FindExecutionPin(*Event, EGPD_Output), GetSchema()->FindExecutionPin(*Export, EGPD_Input), Result, TEXT("Texture tuner Export -> Export Render Target"));
+		Connect(FindAnyPin(GetRT, Map.RenderTargetVariable), FindAnyPin(Export, TEXT("TextureRenderTarget")), Result, TEXT("Texture tuner RT -> PNG export"));
+		Connect(FindAnyPin(GetSavedDirectory, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(Export, TEXT("FilePath")), Result, TEXT("Project Saved directory -> PNG export"));
+		OutNodes.Append({ Event, GetRT, GetSavedDirectory, Export });
+	}
+
+	static FHTBlueprintToggleGeneratorResult GenerateTextureChannelTuner(const FHTBlueprintToggleGeneratorParams& Params)
+	{
+		FHTBlueprintToggleGeneratorResult Result;
+		UBlueprint* AnimBlueprint = LoadBlueprint(Params.AnimBlueprintPath, Result, TEXT("Animation Blueprint"));
+		if (!AnimBlueprint)
+		{
+			return Result;
+		}
+
+		const FName TunerName = ToName(Params.ToggleVariableName, TEXT("TextureTuner"));
+		TArray<int32> MaterialSlots = GetMaterialElementIndices(Params);
+		MaterialSlots.Sort();
+		MaterialSlots.SetNum(Algo::Unique(MaterialSlots));
+		if (MaterialSlots.IsEmpty())
+		{
+			Result.Errors.Add(TEXT("Texture Channel Tuner requires at least one Material Slot."));
+			return Result;
+		}
+		for (const int32 Slot : MaterialSlots)
+		{
+			if (Slot < 0)
+			{
+				Result.Errors.Add(TEXT("Texture Channel Tuner Material Slots must be zero or greater."));
+				return Result;
+			}
+		}
+		if (!Params.bTuneLightMap && !Params.bTuneIDTexture)
+		{
+			Result.Errors.Add(TEXT("Enable LightMap, ID_Tex, or both for the Texture Channel Tuner."));
+			return Result;
+		}
+
+		UMaterialInterface* SourceMaterial = LoadMaterial(Params.SourceMaterialPath, Result, TEXT("Texture Tuner Source Material"));
+		if (!SourceMaterial)
+		{
+			return Result;
+		}
+
+		TArray<FTextureTunerMapSpec> Maps;
+		auto AddMap = [&](const FName ParameterName, const FString& TexturePath)
+		{
+			UTexture2D* PreviewTexture = Cast<UTexture2D>(LoadTexture(TexturePath, Result, ParameterName.ToString()));
+			if (!PreviewTexture)
+			{
+				if (Result.Errors.IsEmpty())
+				{
+					Result.Errors.Add(FString::Printf(TEXT("%s must be a Texture2D."), *ParameterName.ToString()));
+				}
+				return;
+			}
+			UTexture* EffectiveTexture = nullptr;
+			if (!SourceMaterial->GetTextureParameterValue(FMaterialParameterInfo(ParameterName), EffectiveTexture) || !EffectiveTexture)
+			{
+				Result.Errors.Add(FString::Printf(TEXT("The selected material does not expose an effective %s texture parameter."), *ParameterName.ToString()));
+				return;
+			}
+
+			const FString Prefix = TunerName.ToString() + TEXT("_") + ParameterName.ToString();
+			FTextureTunerMapSpec& Map = Maps.AddDefaulted_GetRef();
+			Map.ParameterName = ParameterName;
+			Map.PreviewTexture = PreviewTexture;
+			Map.SourceVariable = FName(*(Prefix + TEXT("_Source")));
+			Map.RenderTargetVariable = FName(*(Prefix + TEXT("_RT")));
+			Map.AdjustmentVariable = FName(*(Prefix + TEXT("_Adjustment")));
+			Map.ApplyEvent = FName(*(TEXT("HTTC_Apply_") + Prefix));
+			Map.ResetEvent = FName(*(TEXT("HTTC_Reset_") + Prefix));
+			Map.ExportEvent = FName(*(TEXT("HTTC_Export_") + Prefix));
+			Map.ExportFileName = PreviewTexture->GetName() + TEXT("_RGB.png");
+		};
+
+		if (Params.bTuneLightMap)
+		{
+			AddMap(TEXT("LightMap"), Params.LightMapTexturePath);
+		}
+		if (Params.bTuneIDTexture)
+		{
+			AddMap(TEXT("ID_Tex"), Params.IDTexturePath);
+		}
+		if (!Result.Errors.IsEmpty() || Maps.IsEmpty())
+		{
+			return Result;
+		}
+
+		AnimBlueprint->Modify();
+		const TArray<FName> MIDVariables = BuildMIDVariableNames(TunerName, MaterialSlots);
+		for (int32 Index = 0; Index < MIDVariables.Num(); ++Index)
+		{
+			if (!EnsureObjectVariable(AnimBlueprint, MIDVariables[Index], UMaterialInstanceDynamic::StaticClass(), Result, FString::Printf(TEXT("Texture tuner MID for slot %d"), MaterialSlots[Index])))
+			{
+				return Result;
+			}
+		}
+		for (const FTextureTunerMapSpec& Map : Maps)
+		{
+			if (!EnsureObjectVariable(AnimBlueprint, Map.SourceVariable, UTexture::StaticClass(), Result, Map.ParameterName.ToString() + TEXT(" original texture"))
+				|| !EnsureObjectVariable(AnimBlueprint, Map.RenderTargetVariable, UTextureRenderTarget2D::StaticClass(), Result, Map.ParameterName.ToString() + TEXT(" render target"))
+				|| !EnsureStructVariable(AnimBlueprint, Map.AdjustmentVariable, TBaseStructure<FLinearColor>::Get(), TEXT("(R=0.000000,G=0.000000,B=0.000000,A=1.000000)"), Result, Map.ParameterName.ToString() + TEXT(" RGB adjustment (-1 = 0, 0 = original, 1 = 255)")))
+			{
+				return Result;
+			}
+		}
+
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(AnimBlueprint);
+		FKismetEditorUtilities::CompileBlueprint(AnimBlueprint);
+		UEdGraph* Graph = FBlueprintEditorUtils::FindEventGraph(AnimBlueprint);
+		if (!Graph)
+		{
+			Result.Errors.Add(TEXT("The Animation Blueprint has no Event Graph."));
+			return Result;
+		}
+		RemoveTextureTunerGroup(Graph, TunerName);
+
+		const int32 BaseY = FindNextLayoutBaseY(Graph);
+		UEdGraphPin* EntryExec = GetEventExecutionEntry(Graph, TEXT("BlueprintInitializeAnimation"), FVector2D(-1500, BaseY), Result);
+		if (!EntryExec)
+		{
+			return Result;
+		}
+		TArray<UEdGraphNode*> Nodes;
+		UK2Node_CallFunction* GetOwning = SpawnCall(Graph, UAnimInstance::StaticClass(), TEXT("GetOwningComponent"), FVector2D(-1450, BaseY + 280), Result);
+		if (!GetOwning)
+		{
+			return Result;
+		}
+		Nodes.Add(GetOwning);
+		UEdGraphPin* InitExec = EntryExec;
+		for (int32 Index = 0; Index < MaterialSlots.Num(); ++Index)
+		{
+			const FVector2D Position(-1180 + Index * 620, BaseY);
+			UK2Node_CallFunction* CreateMID = SpawnCall(Graph, UPrimitiveComponent::StaticClass(), TEXT("CreateDynamicMaterialInstance"), Position, Result);
+			UK2Node_VariableSet* SetMID = SpawnVariableSet(Graph, MIDVariables[Index], nullptr, Position + FVector2D(340, 0));
+			if (!CreateMID || !SetMID)
+			{
+				return Result;
+			}
+			SetDefaultValue(FindAnyPin(CreateMID, TEXT("ElementIndex")), FString::FromInt(MaterialSlots[Index]));
+			Connect(InitExec, GetSchema()->FindExecutionPin(*CreateMID, EGPD_Input), Result, TEXT("Texture tuner init -> Create MID"));
+			Connect(FindAnyPin(GetOwning, UEdGraphSchema_K2::PN_ReturnValue), FindSelfPin(CreateMID), Result, TEXT("Owning Component -> tuner MID"));
+			Connect(FindAnyPin(CreateMID, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SetMID, MIDVariables[Index]), Result, TEXT("Created tuner MID -> variable"));
+			Connect(GetSchema()->FindExecutionPin(*CreateMID, EGPD_Output), GetSchema()->FindExecutionPin(*SetMID, EGPD_Input), Result, TEXT("Create tuner MID -> store MID"));
+			InitExec = GetSchema()->FindExecutionPin(*SetMID, EGPD_Output);
+			Nodes.Append({ CreateMID, SetMID });
+		}
+
+		for (int32 MapIndex = 0; MapIndex < Maps.Num(); ++MapIndex)
+		{
+			const FTextureTunerMapSpec& Map = Maps[MapIndex];
+			const FVector2D Position(-1180 + MaterialSlots.Num() * 620 + MapIndex * 920, BaseY);
+			UK2Node_VariableGet* GetMID = SpawnVariableGet(Graph, MIDVariables[0], nullptr, Position + FVector2D(0, 300));
+			UK2Node_CallFunction* GetTexture = SpawnCall(Graph, UMaterialInstanceDynamic::StaticClass(), TEXT("K2_GetTextureParameterValue"), Position, Result);
+			UK2Node_VariableSet* SetSource = SpawnVariableSet(Graph, Map.SourceVariable, nullptr, Position + FVector2D(300, 0));
+			UK2Node_CallFunction* CreateRT = SpawnCall(Graph, UKismetRenderingLibrary::StaticClass(), TEXT("CreateRenderTarget2D"), Position + FVector2D(560, 0), Result);
+			UK2Node_VariableSet* SetRT = SpawnVariableSet(Graph, Map.RenderTargetVariable, nullptr, Position + FVector2D(900, 0));
+			if (!GetMID || !GetTexture || !SetSource || !CreateRT || !SetRT)
+			{
+				return Result;
+			}
+			SetDefaultValue(FindAnyPin(GetTexture, TEXT("ParameterName")), Map.ParameterName.ToString());
+			SetDefaultValue(FindAnyPin(CreateRT, TEXT("Width")), FString::FromInt(Map.PreviewTexture->GetSizeX()));
+			SetDefaultValue(FindAnyPin(CreateRT, TEXT("Height")), FString::FromInt(Map.PreviewTexture->GetSizeY()));
+			SetDefaultValue(FindAnyPin(CreateRT, TEXT("Format")), TEXT("RTF_RGBA8"));
+			SetDefaultValue(FindAnyPin(CreateRT, TEXT("ClearColor")), TEXT("(R=0.000000,G=0.000000,B=0.000000,A=0.000000)"));
+			// EndDrawCanvasToRenderTarget resolves mip 0 but does not regenerate lower mips.
+			// Keep calibration previews single-mip so view-dependent LOD cannot sample stale data.
+			SetDefaultValue(FindAnyPin(CreateRT, TEXT("bAutoGenerateMipMaps")), TEXT("false"));
+			Connect(InitExec, GetSchema()->FindExecutionPin(*GetTexture, EGPD_Input), Result, TEXT("Tuner MID init -> read original texture"));
+			Connect(FindAnyPin(GetMID, MIDVariables[0]), FindSelfPin(GetTexture), Result, TEXT("Tuner MID -> Get Texture Parameter"));
+			Connect(FindAnyPin(GetTexture, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SetSource, Map.SourceVariable), Result, TEXT("Original texture -> source variable"));
+			Connect(GetSchema()->FindExecutionPin(*GetTexture, EGPD_Output), GetSchema()->FindExecutionPin(*SetSource, EGPD_Input), Result, TEXT("Get original texture -> store source"));
+			Connect(GetSchema()->FindExecutionPin(*SetSource, EGPD_Output), GetSchema()->FindExecutionPin(*CreateRT, EGPD_Input), Result, TEXT("Store source -> Create RT"));
+			Connect(FindAnyPin(CreateRT, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SetRT, Map.RenderTargetVariable), Result, TEXT("Created RT -> variable"));
+			Connect(GetSchema()->FindExecutionPin(*CreateRT, EGPD_Output), GetSchema()->FindExecutionPin(*SetRT, EGPD_Input), Result, TEXT("Create RT -> store RT"));
+			InitExec = GetSchema()->FindExecutionPin(*SetRT, EGPD_Output);
+			Nodes.Append({ GetMID, GetTexture, SetSource, CreateRT, SetRT });
+		}
+
+		for (int32 MapIndex = 0; MapIndex < Maps.Num(); ++MapIndex)
+		{
+			const float MapY = BaseY + 900.0f + MapIndex * 2000.0f;
+			GenerateTextureTunerApplyGraph(Graph, Maps[MapIndex], MIDVariables, FVector2D(-1450, MapY), Nodes, Result);
+			GenerateTextureTunerResetGraph(Graph, Maps[MapIndex], MIDVariables, FVector2D(-1450, MapY + 1100), Nodes, Result);
+			GenerateTextureTunerExportGraph(Graph, Maps[MapIndex], FVector2D(-1450, MapY + 1500), Nodes, Result);
+		}
+
+		FString Metadata = FString::Printf(TEXT("HT Texture Tuner - %s;Display=%s;Mode=BlackWhiteV1"), *TunerName.ToString(), *SourceMaterial->GetName());
+		for (const FTextureTunerMapSpec& Map : Maps)
+		{
+			Metadata += FString::Printf(
+				TEXT(";%s=%s,%s,%s,%s,%s,%s"),
+				*Map.ParameterName.ToString(),
+				*Map.AdjustmentVariable.ToString(),
+				*Map.ApplyEvent.ToString(),
+				*Map.ResetEvent.ToString(),
+				Map.PreviewTexture ? *Map.PreviewTexture->GetName() : TEXT("Unknown"),
+				*Map.ExportEvent.ToString(),
+				*Map.ExportFileName);
+		}
+		const float CommentHeight = 1100.0f + Maps.Num() * 2000.0f;
+		const float CommentWidth = 2960.0f + MaterialSlots.Num() * 360.0f;
+		UEdGraphNode_Comment* Comment = SpawnCommentBox(
+			Graph,
+			Metadata,
+			FVector2D(-1550, BaseY - 300),
+			FVector2D(CommentWidth, CommentHeight),
+			FLinearColor(0.20f, 0.08f, 0.32f, 1.0f));
+		AddNodesToComment(Comment, Nodes);
+
+		FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBlueprint);
+		FKismetEditorUtilities::CompileBlueprint(AnimBlueprint);
+		if (AnimBlueprint->Status == BS_Error)
+		{
+			Result.Errors.Add(TEXT("The Animation Blueprint has compile errors after Texture Channel Tuner generation."));
+		}
+		AnimBlueprint->MarkPackageDirty();
+		if (Params.bSaveAssets && Result.Errors.IsEmpty())
+		{
+			TArray<UPackage*> Packages = { AnimBlueprint->GetOutermost() };
+			TArray<UPackage*> FailedPackages;
+			FEditorFileUtils::PromptForCheckoutAndSave(Packages, false, false, &FailedPackages, true, false);
+			if (!FailedPackages.IsEmpty())
+			{
+				Result.Errors.Add(TEXT("Texture Channel Tuner nodes were generated, but the Animation Blueprint could not be saved."));
+			}
+			else
+			{
+				Result.Messages.Add(TEXT("Animation Blueprint saved."));
+			}
+		}
+
+		if (Result.Errors.IsEmpty())
+		{
+			Result.Messages.Add(FString::Printf(TEXT("Generated Texture Channel Tuner %s for slots: %s"), *TunerName.ToString(), *FString::JoinBy(MaterialSlots, TEXT(","), [](const int32 Slot) { return FString::FromInt(Slot); })));
+			Result.Messages.Add(TEXT("RGB adjustments start at 0 (original). Regenerate the NTE panel: -100% = 0, +100% = 255. PNG export uses the processed texture."));
+		}
+		Result.bSuccess = Result.Errors.IsEmpty();
+		return Result;
+	}
 }
 
 FString FHTBlueprintToggleGeneratorResult::ToDisplayString() const
@@ -1839,6 +2393,10 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 	FHTBlueprintToggleGeneratorResult Result;
 
 	const FScopedTransaction Transaction(LOCTEXT("GenerateToggleNodes", "Generate HT Blueprint Toggle Nodes"));
+	if (Params.Mode == EHTBlueprintToggleMode::TextureChannelTuner)
+	{
+		return GenerateTextureChannelTuner(Params);
+	}
 
 	UBlueprint* AnimBlueprint = LoadBlueprint(Params.AnimBlueprintPath, Result, TEXT("动画蓝图"));
 	UBlueprint* SaveBlueprint = LoadBlueprint(Params.SaveGameBlueprintPath, Result, TEXT("SaveGame 蓝图"));

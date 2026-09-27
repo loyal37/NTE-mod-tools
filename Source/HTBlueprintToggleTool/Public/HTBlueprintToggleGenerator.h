@@ -6,7 +6,8 @@ enum class EHTBlueprintToggleMode : uint8
 {
 	MaterialSection,
 	Texture,
-	MaterialInterface
+	MaterialInterface,
+	TextureChannelTuner
 };
 
 struct FHTTextureMaterialSlotGroup
@@ -44,6 +45,10 @@ struct FHTBlueprintToggleGeneratorParams
 	FString TextureParameterName;
 	TArray<FString> TexturePaths;
 	TArray<FString> MaterialInterfacePaths;
+	bool bTuneLightMap = false;
+	bool bTuneIDTexture = false;
+	FString LightMapTexturePath;
+	FString IDTexturePath;
 	bool bGenerateInitializeGraph = true;
 	bool bGenerateUpdateGraph = true;
 	bool bSaveAssets = true;

@@ -44,6 +44,7 @@ private:
 	TSharedRef<SWidget> MakeTextureMaterialGroupsHeaderRow();
 	TSharedRef<SWidget> MakeTextureMaterialGroupRow(int32 GroupIndex);
 	TSharedRef<SWidget> MakeMaterialPickerRow();
+	TSharedRef<SWidget> MakeTextureTunerTextureRow(const FText& Label, bool bLightMap);
 	TSharedRef<SWidget> MakeTexturePickerRow(int32 GroupIndex, int32 TextureIndex);
 	TSharedRef<SWidget> MakeMaterialInterfacePickerRow(int32 MaterialIndex);
 	TSharedRef<SWidget> MakeMaterialGroupRow(int32 GroupIndex);
@@ -77,6 +78,9 @@ private:
 	void OnTextureGroupSourceMaterialChanged(const FAssetData& AssetData, int32 GroupIndex);
 	void OnTextureChanged(const FAssetData& AssetData, int32 GroupIndex, int32 TextureIndex);
 	void OnMaterialInterfaceChanged(const FAssetData& AssetData, int32 MaterialIndex);
+	void OnTextureTunerSourceMaterialChanged(const FAssetData& AssetData);
+	void OnTextureTunerTextureChanged(const FAssetData& AssetData, bool bLightMap);
+	void PopulateTextureTunerFromMaterial(UMaterialInterface* Material);
 	bool ShouldFilterTextureAsset(const FAssetData& AssetData) const;
 	bool ShouldFilterMaterialInterfaceAsset(const FAssetData& AssetData) const;
 	void LoadBlueprintSettings();
@@ -108,6 +112,9 @@ private:
 	FString SaveGameBlueprintPath;
 	FString CharacterFolderPath;
 	FString SourceMaterialPath;
+	FString TextureTunerSourceMaterialPath;
+	FString TextureTunerLightMapPath;
+	FString TextureTunerIDTexturePath;
 	TArray<FTextureMaterialGroupInput> TextureMaterialGroups;
 	TArray<FString> MaterialInterfacePaths;
 	EHTBlueprintToggleMode ToggleMode = EHTBlueprintToggleMode::MaterialSection;
@@ -124,6 +131,7 @@ private:
 	TSharedPtr<SEditableTextBox> MaterialIDsBox;
 	TSharedPtr<SSpinBox<int32>> InitialStateSpinBox;
 	TSharedPtr<SEditableTextBox> MaterialInterfaceSlotsBox;
+	TSharedPtr<SEditableTextBox> TextureTunerSlotsBox;
 	TSharedPtr<SEditableTextBox> CharacterFolderBox;
 	TSharedPtr<SEditableTextBox> TextureParameterBox;
 	TSharedPtr<SWidgetSwitcher> ModeOptionsSwitcher;
@@ -133,6 +141,8 @@ private:
 	TSharedPtr<SCheckBox> InitGraphCheckBox;
 	TSharedPtr<SCheckBox> UpdateGraphCheckBox;
 	TSharedPtr<SCheckBox> SaveAssetsCheckBox;
+	TSharedPtr<SCheckBox> TuneLightMapCheckBox;
+	TSharedPtr<SCheckBox> TuneIDTextureCheckBox;
 	TSharedPtr<STextBlock> AssetSummaryText;
 	TSharedPtr<STextBlock> StatusText;
 };

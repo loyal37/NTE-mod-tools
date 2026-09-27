@@ -6,6 +6,7 @@
 
 - 生成单个或多个材质区域的显示/隐藏蓝图。
 - 生成单材质槽或多材质槽的多贴图循环切换蓝图。
+- 为现有材质的 `LightMap` 和 `ID_Tex` 生成临时 RGB 通道调节蓝图，支持向 0 / 255 调节，不需要打包新的材质球。
 - 支持普通按键、符号按键，以及 `ctrl`、`shift`、`alt` 组合按键。
 - 在角色文件夹中创建对应角色的 AnimBP 和 SaveGame 蓝图，并自动绑定到骨骼网格体的后期处理动画蓝图。
 - 根据 Anim Variable 自动创建动画蓝图变量、SaveGame 变量、读取与保存逻辑。
@@ -21,7 +22,7 @@
 1. 从 GitHub Releases 下载：
 
    ```text
-   HTToggleTool-v1.5.20.zip
+   HTToggleTool-v1.5.23.zip
    ```
 
 2. 关闭 Unreal Editor。
@@ -45,11 +46,29 @@
 - `Material visibility`：材质区域显示/隐藏。逗号分隔循环状态，`+` 连接同一状态内同时显示的材质；例如 `1+2,3+4` 会在“显示 1/2”“显示 3/4”“全部隐藏”之间循环。`Initial State` 可设置首次没有对应存档时使用的默认状态，不会改变状态顺序，全部隐藏仍然是最后一个状态。
 - `Texture switch`：材质贴图循环切换。
 - `Material switch`：对一个或多个 Material Slot 循环切换指定材质球；材质球选择列表会限制在当前 Character Folder 内。
+- `RGB tuner`：对现有材质的 `LightMap`、`ID_Tex` 或两者生成运行时 RGB 黑白混合调节节点。
 - `Material Instance`：重建材质节点并创建材质实例。
 - `Slot Materials`：处理骨骼网格体材质槽的材质球分配。
 
 在 `Texture switch` 模式中点击 `Material Slot(s)` 右侧的 `Analyze`，插件会分析当前 AnimBP 的预览骨骼网格体，把使用同一个材质的 Slot 分到同一组。选择某一组后，会自动填写该组的全部 Slot ID，并同步填写 `Source Material`。分组列表会显示对应材质的材质球缩略图，不再使用贴图参数作为预览图。
 选择 `Texture 1/2/...` 时，贴图资产列表会限制在 `Settings` 当前选择的角色文件夹及其子目录内，避免误选其他角色的贴图。
+
+### RGB 通道调节器
+
+`RGB tuner` 用于临时观察 `LightMap` 与 `ID_Tex` 三个通道对角色质感的影响，确定数值后再到外部图像工具中修改原贴图。它不会写入 SaveGame，也不会改变材质/贴图切换的状态顺序。
+
+1. 选择 AnimBP，在 `Material Slot(s)` 右侧点击 `Analyze`。
+2. 选择目标材质组；工具会自动填入所有使用该材质的 Slot，并读取有效的 `LightMap` 与 `ID_Tex` 参数贴图。
+3. 勾选需要调节的贴图，点击生成。
+4. 再用 NTE Panel System 扫描并生成游戏内滑块面板。
+
+生成的 MID 使用每个 Slot 当时已有的材质，不会绑定或要求打包一个新的材质球。运行时缓存原贴图，每个通道采用 `-100%～+100%` 的黑白混合调节：`0%` 保持原值，`-100%` 达到 0，`+100%` 达到 255。原来为 0 的像素也可以调高。内部调整量 `t` 为 `-1～1`，计算为 `原像素 × (1 − abs(t)) + 255 × max(t, 0)`；例如原值 60 调到 +50% 后约为 158。百分比表示调整程度，不是整张贴图统一的最终像素值。
+
+每次 Apply 都先从原图完整覆盖临时贴图，再加入向白色调整的分量，保留 Alpha，来回拖动不累计上次结果。`Reset` 恢复原贴图对象与三个 `0%` 调整量。`Export PNG` 会先按当前调整量重新绘制，再把实际处理后的 RGBA8 Render Target 写入运行时项目的 `Saved` 目录，文件名仍为 `<原贴图名>_RGB.png`；重复导出覆盖同一文件。在当前游戏中已确认目录为 `%LOCALAPPDATA%\HT\Saved`。
+
+临时预览的 LightMap 和 ID Render Target 均关闭自动 Mip，只使用当前绘制的原尺寸层级，避免转动视角或拉远时采到未更新的缩小层级而出现残留。远距离预览可能增加锯齿；Reset 后仍使用原贴图及其原有 Mip。跨 ID 判定边界仍可能改变材质类型。
+
+从旧倍率版升级时，先用相同 `Tuner Name` 重新生成 RGB 调节器，再使用 NTE Panel System 0.1.15 重新扫描并生成面板，最后重新烘焙 AnimBP、BPI、WBP。新元数据包含 `Mode=BlackWhiteV1`，调整变量后缀为 `_Adjustment`；新面板会拒绝旧倍率元数据，避免两套算法混用。
 
 示例：
 
