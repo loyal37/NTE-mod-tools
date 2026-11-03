@@ -15,7 +15,10 @@
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/PackageName.h"
 #include "ObjectTools.h"
+#include "PropertyEditorModule.h"
 #include "SHTBlueprintToggleToolPanel.h"
+#include "ToggleGraph/HTToggleGraphNodes.h"
+#include "ToggleGraph/HTToggleGraphPartDetails.h"
 #include "ToolMenus.h"
 #include "UObject/Package.h"
 #include "Widgets/Docking/SDockTab.h"
@@ -168,6 +171,12 @@ namespace
 
 void FHTBlueprintToggleToolModule::StartupModule()
 {
+	// Toggle graph part nodes list the preview mesh material slots in their details panel.
+	FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
+	PropertyModule.RegisterCustomClassLayout(
+		UHTToggleGraphNode_Part::StaticClass()->GetFName(),
+		FOnGetDetailCustomizationInstance::CreateStatic(&FHTToggleGraphPartDetails::MakeInstance));
+
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
 		ToolTabName,
 		FOnSpawnTab::CreateRaw(this, &FHTBlueprintToggleToolModule::SpawnPluginTab))
@@ -205,6 +214,11 @@ void FHTBlueprintToggleToolModule::StartupModule()
 
 void FHTBlueprintToggleToolModule::ShutdownModule()
 {
+	if (FPropertyEditorModule* PropertyModule = FModuleManager::GetModulePtr<FPropertyEditorModule>("PropertyEditor"))
+	{
+		PropertyModule->UnregisterCustomClassLayout(UHTToggleGraphNode_Part::StaticClass()->GetFName());
+	}
+
 	MigrateSaveSlotNamesAndExitConsoleCommand.Reset();
 	MigrateSaveSlotNamesConsoleCommand.Reset();
 	OpenMaterialSlotMapperConsoleCommand.Reset();

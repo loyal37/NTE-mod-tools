@@ -31,6 +31,7 @@ private:
 	FReply OnGenerateClicked();
 	FReply OnOpenMaterialInstanceCreatorClicked();
 	FReply OnOpenMaterialSlotMapperClicked();
+	FReply OnOpenToggleGraphClicked();
 	FReply OnOpenCookedAssetExporterClicked();
 	FReply OnOpenSettingsClicked();
 	FReply OnCloseSettingsClicked();

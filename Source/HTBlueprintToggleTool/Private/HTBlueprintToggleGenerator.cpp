@@ -2669,7 +2669,8 @@ namespace HTToggleGenerator
 			FString VariableName = DistinctExplicitNames.Num() > 0 ? DistinctExplicitNames[0] : FString();
 			if (VariableName.IsEmpty())
 			{
-				FString Suffix = SanitizeNestedIdentifier(FirstSwitch.NodeId);
+				// Unnamed switches are grouped by key, so the key is their stable, readable name.
+				FString Suffix = SanitizeNestedIdentifier(DistinctCanonicalKeys.Num() > 0 ? DistinctCanonicalKeys[0] : FString());
 				if (Suffix.IsEmpty())
 				{
 					Suffix = FString::Printf(TEXT("Switch%d"), Variable.SwitchIndices[0] + 1);

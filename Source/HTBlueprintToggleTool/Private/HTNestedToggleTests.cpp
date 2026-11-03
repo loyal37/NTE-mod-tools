@@ -72,8 +72,8 @@ namespace HTNestedToggleTests
 	{
 		TMap<FName, int32> State;
 		State.Add(TEXT("Style"), Style);
-		State.Add(TEXT("Typhoeus_A0"), A);
-		State.Add(TEXT("Typhoeus_B0"), B);
+		State.Add(TEXT("Typhoeus_Alt_Six"), A);
+		State.Add(TEXT("Typhoeus_Alt_Seven"), B);
 		State.Add(TEXT("Stocking"), Stocking);
 		return State;
 	}
@@ -116,8 +116,8 @@ namespace HTNestedToggleTests
 	static TMap<int32, TArray<FCondition>> ExpectedTyphoeusConditions()
 	{
 		const FName Style(TEXT("Style"));
-		const FName A(TEXT("Typhoeus_A0"));
-		const FName B(TEXT("Typhoeus_B0"));
+		const FName A(TEXT("Typhoeus_Alt_Six"));
+		const FName B(TEXT("Typhoeus_Alt_Seven"));
 		const FName S(TEXT("Stocking"));
 		TMap<int32, TArray<FCondition>> Expected;
 		auto Add = [&Expected](const int32 MaterialID, std::initializer_list<FCondition> Conditions)
@@ -396,7 +396,7 @@ bool FHTNestedToggleTreeValidationTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("Every shared variable has exactly one key"), Variable.KeyNames.Num(), 1);
 		}
 		TestTrue(TEXT("Explicit style name is kept"), Names.Contains(TEXT("Style")));
-		TestTrue(TEXT("Derived names combine tree and first switch"), Names.Contains(TEXT("Typhoeus_A0")) && Names.Contains(TEXT("Typhoeus_B0")));
+		TestTrue(TEXT("Derived names combine tree and key"), Names.Contains(TEXT("Typhoeus_Alt_Six")) && Names.Contains(TEXT("Typhoeus_Alt_Seven")));
 		TestTrue(TEXT("One explicit name renames the whole shared group"), Names.Contains(TEXT("Stocking")));
 		TestEqual(TEXT("All switches map to a variable"), Compiled.SwitchVariableIndices.Num(), 10);
 		TestEqual(TEXT("C0 and C2 share the stocking variable"), Compiled.SwitchVariableIndices[3], Compiled.SwitchVariableIndices[9]);
@@ -642,7 +642,7 @@ bool FHTNestedToggleTreeGenerationTest::RunTest(const FString& Parameters)
 		TestEqual(*FString::Printf(TEXT("%s: the tree never expands Switch on Int"), Pass), Counts.Switches, 2);
 		TestEqual(*FString::Printf(TEXT("%s: legacy update group preserved"), Pass), Counts.LegacyUpdateComments, 1);
 		TestEqual(*FString::Printf(TEXT("%s: legacy init group preserved"), Pass), Counts.LegacyInitComments, 1);
-		for (const TCHAR* Slot : { TEXT("Style Typhoeus"), TEXT("Typhoeus_A0 Typhoeus"), TEXT("Typhoeus_B0 Typhoeus"), TEXT("Stocking Typhoeus") })
+		for (const TCHAR* Slot : { TEXT("Style Typhoeus"), TEXT("Typhoeus_Alt_Six Typhoeus"), TEXT("Typhoeus_Alt_Seven Typhoeus"), TEXT("Stocking Typhoeus") })
 		{
 			TestTrue(*FString::Printf(TEXT("%s: save slot %s carries the character name"), Pass, Slot), Counts.SlotNames.Contains(Slot));
 		}
@@ -664,7 +664,7 @@ bool FHTNestedToggleTreeGenerationTest::RunTest(const FString& Parameters)
 		TestTrue(*FString::Printf(TEXT("%s: root switch entry has labels and no parent"), Pass), Counts.Metadata.Contains(TEXT(";Switch=Style,Alt Five,3,,-1,Outfit style,A|B|C")));
 		TestTrue(*FString::Printf(TEXT("%s: shared stocking entry under style 2 marks its empty option"), Pass), Counts.Metadata.Contains(TEXT(";Switch=Stocking,Alt Eight,2,Style,2,Stocking,1|")));
 		TestTrue(*FString::Printf(TEXT("%s: stocking entry under style 0 marks option 0 empty"), Pass), Counts.Metadata.Contains(TEXT(";Switch=Stocking,Alt Eight,2,Style,0,Stocking,|2")));
-		TestTrue(*FString::Printf(TEXT("%s: unused switch marks both options empty"), Pass), Counts.Metadata.Contains(TEXT(";Switch=Typhoeus_B0,Alt Seven,2,Style,2,Typhoeus_B0,|")));
+		TestTrue(*FString::Printf(TEXT("%s: unused switch marks both options empty"), Pass), Counts.Metadata.Contains(TEXT(";Switch=Typhoeus_Alt_Seven,Alt Seven,2,Style,2,Typhoeus_Alt_Seven,|")));
 
 		// Every managed material gets exactly the AND of its path; nothing else is touched.
 		const TMap<int32, TArray<FCondition>> Expected = ExpectedTyphoeusConditions();

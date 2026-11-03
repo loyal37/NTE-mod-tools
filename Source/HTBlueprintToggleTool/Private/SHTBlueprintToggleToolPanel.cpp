@@ -1,5 +1,10 @@
 #include "SHTBlueprintToggleToolPanel.h"
 
+#include "Editor.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "ToggleGraph/HTToggleGraph.h"
+#include "ToggleGraph/HTToggleGraphFactory.h"
+
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimBlueprint.h"
 #include "AnimationGraphSchema.h"
@@ -587,6 +592,31 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 							.VAlign(VAlign_Center)
 							[
 								SNew(STextBlock).Text(LOCTEXT("MaterialSlotMapperButton", "Slot Materials"))
+							]
+						]
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(8, 0, 0, 0)
+					[
+						SNew(SButton)
+						.ToolTipText(LOCTEXT("ToggleGraphTooltip", "Open the nested toggle graph bound to the selected Animation Blueprint (created next to it as TG_<AnimBP>)."))
+						.OnClicked(this, &SHTBlueprintToggleToolPanel::OnOpenToggleGraphClicked)
+						[
+							SNew(SHorizontalBox)
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.VAlign(VAlign_Center)
+							.Padding(0, 0, 4, 0)
+							[
+								SNew(SImage).Image(FAppStyle::GetBrush("GraphEditor.EventGraph_16x"))
+							]
+							+ SHorizontalBox::Slot()
+							.AutoWidth()
+							.VAlign(VAlign_Center)
+							[
+								SNew(STextBlock).Text(LOCTEXT("ToggleGraphButton", "\u6253\u5F00\u84DD\u56FE"))
 							]
 						]
 					]
@@ -1925,6 +1955,42 @@ FReply SHTBlueprintToggleToolPanel::OnOpenMaterialSlotMapperClicked()
 	const float WindowX = WorkArea.Left + FMath::Max(0.0f, (WorkAreaWidth - DesiredWindowSize.X) * 0.5f);
 	const float WindowY = WorkArea.Top + FMath::Max(0.0f, (WorkAreaHeight - DesiredWindowSize.Y) * 0.5f);
 	Window->MoveWindowTo(FVector2D(WindowX, WindowY));
+	return FReply::Handled();
+}
+
+FReply SHTBlueprintToggleToolPanel::OnOpenToggleGraphClicked()
+{
+	using namespace HTTogglePanel;
+	UAnimBlueprint* AnimBlueprint = LoadAsset<UAnimBlueprint>(AnimBlueprintPath);
+	if (!AnimBlueprint)
+	{
+		ShowPanelError(LOCTEXT("ToggleGraphNoAnimBP", "Choose an Animation Blueprint in Settings first."));
+		return FReply::Handled();
+	}
+	if (CharacterFolderPath.IsEmpty())
+	{
+		CharacterFolderPath = InferCharacterFolderFromAnimBlueprint();
+		SaveBlueprintSettings();
+	}
+	FString Error;
+	UHTToggleGraph* Asset = UHTToggleGraphFactory::FindOrCreateForAnimBlueprint(
+		AnimBlueprint,
+		SaveGameBlueprintPath,
+		MakeCharacterAssetBaseName(CharacterFolderPath),
+		Error);
+	if (!Asset)
+	{
+		ShowPanelError(FText::FromString(Error));
+		return FReply::Handled();
+	}
+	if (UAssetEditorSubsystem* AssetEditors = GEditor ? GEditor->GetEditorSubsystem<UAssetEditorSubsystem>() : nullptr)
+	{
+		AssetEditors->OpenEditorForAsset(Asset);
+	}
+	if (StatusText.IsValid())
+	{
+		StatusText->SetText(FText::FromString(FString::Printf(TEXT("Toggle graph: %s"), *Asset->GetPathName())));
+	}
 	return FReply::Handled();
 }
 

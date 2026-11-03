@@ -9,6 +9,8 @@ public class HTBlueprintToggleTool : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
+				"ApplicationCore",
+				"AssetDefinition",
 				"AssetTools",
 				"AssetRegistry",
 				"AnimGraph",
@@ -17,8 +19,10 @@ public class HTBlueprintToggleTool : ModuleRules
 				"Core",
 				"CoreUObject",
 				"DesktopPlatform",
+				"EditorFramework",
 				"EditorStyle",
 				"Engine",
+				"GraphEditor",
 				"ImageCore",
 				"InputCore",
 				"Json",
