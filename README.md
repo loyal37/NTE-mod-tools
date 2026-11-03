@@ -90,6 +90,16 @@ v1.5.28 按用户要求恢复之前的倍率版实现（含 PNG 导出和单 Mip
 
 回退必须用相同 `Tuner Name` 重新生成 RGB 调节器，然后用 NTE Panel System v0.1.17 重新扫描、生成面板，并重新烘焙打包 AnimBP、BPI、WBP。倍率变量恢复为 `_Gain`，元数据不含 `Mode`；面板拒绝未回退的有模式字段调节器，避免两套算法混用。只换插件 DLL 不会修改已生成/打包的蓝图。
 
+### 嵌套切换（Toggle Tree，v1.5.29 第 1 阶段）
+
+LoyalTools 风格的嵌套切换：外层切换的每个选项下可以再挂切换，部件可见 = 路径上所有“变量 == 选项”条件的 AND。第 1 阶段只提供生成器入口 `FHTBlueprintToggleGenerator::GenerateNestedVisibility`（条件模型 `FHTNestedToggleGraph`：switches + parts），UE 原生图编辑器和主面板“打开蓝图”按钮在第 3 阶段提供。该功能独立于 `Material visibility` 等现有模式，不改变它们的生成逻辑、`5+6;8+10` 文本语法和面板扫描。
+
+- 填了同一按键的切换共用一个状态变量（也可以直接填相同变量名），一起翻转；它们的选项数和初始选项必须相同，否则报错并指明节点。
+- 一个 Material ID 只能出现在一条路径/一个部件里，否则报错并指明两个部件。空选项位置任意，不需要特殊表示。
+- 按键使用现有按键解析（普通键、符号键、`ctrl/shift/alt` 组合），不支持 hold。
+- 生成内容：每个状态变量一个 AnimBP int 变量 + SaveGame 变量（槽名 `<变量> <角色名>`）；`HTN_Apply_<名>` 自定义事件按 AND 条件调用 `ShowMaterialSection`，不在图里的 ID 不碰；`BlueprintUpdateAnimation` 中每个变量一段 `WasInputKeyJustPressed && WasRecentlyRendered → (var+1)%N → 保存 → Apply`，不看父条件；初始化依次读取全部存档（无存档则写初始选项，越界值 Clamp），最后 Apply 一次。
+- 整个树是一个受管区域：注释框 `HT Toggle Tree - <名>;Apply=HTN_Apply_<名>;Switch=<变量>,<按键>,<选项数>,<父变量>,<父选项>,<标签>,<选项标签|…>`（无父时父变量为空、父选项 -1；空选项的标签为空，供面板显示“隐藏”）。按名整体替换，不追加。
+
 示例：
 
 ```text

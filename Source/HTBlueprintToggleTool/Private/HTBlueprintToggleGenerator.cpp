@@ -2335,6 +2335,895 @@ namespace HTToggleGenerator
 		Result.bSuccess = Result.Errors.IsEmpty();
 		return Result;
 	}
+
+	// ------------------------------------------------------------------
+	// Nested visibility (toggle tree). Independent from the modes above:
+	// it only shares the static helpers and never changes their behavior.
+	// ------------------------------------------------------------------
+
+	static const TCHAR* const NestedToggleCommentPrefix = TEXT("HT Toggle Tree - ");
+	static const TCHAR* const NestedToggleApplyPrefix = TEXT("HTN_Apply_");
+
+	static bool IsAsciiIdentifierChar(const TCHAR Character)
+	{
+		return (Character >= TEXT('a') && Character <= TEXT('z'))
+			|| (Character >= TEXT('A') && Character <= TEXT('Z'))
+			|| (Character >= TEXT('0') && Character <= TEXT('9'))
+			|| Character == TEXT('_');
+	}
+
+	// Blueprint member and event names stay ASCII so the Kismet compiler, SaveGame
+	// slots and panel metadata never depend on the editor locale.
+	static FString SanitizeNestedIdentifier(const FString& Raw)
+	{
+		FString Sanitized;
+		for (const TCHAR Character : Trimmed(Raw))
+		{
+			if (IsAsciiIdentifierChar(Character))
+			{
+				Sanitized.AppendChar(Character);
+			}
+			else if (FChar::IsWhitespace(Character) || Character == TEXT('-') || Character == TEXT('.'))
+			{
+				if (!Sanitized.IsEmpty() && !Sanitized.EndsWith(TEXT("_")))
+				{
+					Sanitized.AppendChar(TEXT('_'));
+				}
+			}
+		}
+		while (Sanitized.EndsWith(TEXT("_")))
+		{
+			Sanitized.LeftChopInline(1);
+		}
+		if (!Sanitized.IsEmpty() && FChar::IsDigit(Sanitized[0]))
+		{
+			Sanitized = TEXT("_") + Sanitized;
+		}
+		return Sanitized;
+	}
+
+	// Metadata fields are separated by ';' and ','; option labels additionally use '|'.
+	static FString SanitizeNestedMetadataField(FString Value)
+	{
+		Value.TrimStartAndEndInline();
+		for (const TCHAR* Forbidden : { TEXT(";"), TEXT(","), TEXT("="), TEXT("|"), TEXT("\r"), TEXT("\n"), TEXT("\t") })
+		{
+			Value.ReplaceInline(Forbidden, TEXT(" "));
+		}
+		return Value;
+	}
+
+	static FString MakeNestedCanonicalKey(const FInputKeySpec& Spec)
+	{
+		FString Canonical;
+		switch (Spec.Modifier)
+		{
+		case EInputKeyModifier::Control: Canonical = TEXT("Ctrl "); break;
+		case EInputKeyModifier::Shift: Canonical = TEXT("Shift "); break;
+		case EInputKeyModifier::Alt: Canonical = TEXT("Alt "); break;
+		default: break;
+		}
+		return Canonical + Spec.MainKey.GetFName().ToString();
+	}
+
+	static FString MakeNestedSlotName(const FName VariableName, const FString& CharacterName)
+	{
+		FString SlotName = VariableName.ToString();
+		const FString Character = Trimmed(CharacterName);
+		if (!Character.IsEmpty())
+		{
+			SlotName += TEXT(" ") + Character;
+		}
+		return SlotName;
+	}
+
+	static FString JoinNodeIds(const TArray<FString>& NodeIds)
+	{
+		return FString::Join(NodeIds, TEXT(", "));
+	}
+
+	struct FNestedUnionFind
+	{
+		TArray<int32> Parent;
+
+		explicit FNestedUnionFind(const int32 Count)
+		{
+			Parent.SetNum(Count);
+			for (int32 Index = 0; Index < Count; ++Index)
+			{
+				Parent[Index] = Index;
+			}
+		}
+
+		int32 Find(int32 Index)
+		{
+			while (Parent[Index] != Index)
+			{
+				Parent[Index] = Parent[Parent[Index]];
+				Index = Parent[Index];
+			}
+			return Index;
+		}
+
+		void Union(const int32 A, const int32 B)
+		{
+			const int32 RootA = Find(A);
+			const int32 RootB = Find(B);
+			if (RootA != RootB)
+			{
+				// Keep the smallest index as the representative so group order is stable.
+				Parent[FMath::Max(RootA, RootB)] = FMath::Min(RootA, RootB);
+			}
+		}
+	};
+
+	static bool CompileNestedToggleGraphImpl(
+		const FHTNestedToggleGraph& Graph,
+		FHTNestedToggleCompiledGraph& OutCompiled,
+		TArray<FHTNestedToggleIssue>& OutErrors)
+	{
+		OutCompiled = FHTNestedToggleCompiledGraph();
+		OutCompiled.Name = FHTBlueprintToggleGenerator::SanitizeNestedToggleGraphName(Graph.Name);
+		auto AddIssue = [&OutErrors](TArray<FString> NodeIds, const FString& Message)
+		{
+			FHTNestedToggleIssue& Issue = OutErrors.AddDefaulted_GetRef();
+			Issue.NodeIds = MoveTemp(NodeIds);
+			Issue.Message = Message;
+		};
+
+		const int32 SwitchCount = Graph.Switches.Num();
+		TMap<FString, int32> SwitchIndexById;
+		TArray<FInputKeySpec> KeySpecs;
+		KeySpecs.SetNum(SwitchCount);
+		TArray<FString> ExplicitNames;
+		ExplicitNames.SetNum(SwitchCount);
+		for (int32 Index = 0; Index < SwitchCount; ++Index)
+		{
+			const FHTNestedToggleSwitch& Switch = Graph.Switches[Index];
+			const FString NodeId = Trimmed(Switch.NodeId);
+			if (NodeId.IsEmpty())
+			{
+				AddIssue({}, FString::Printf(TEXT("Switch %d has no node id."), Index + 1));
+				continue;
+			}
+			if (SwitchIndexById.Contains(NodeId))
+			{
+				AddIssue({ NodeId }, FString::Printf(TEXT("Switch node id %s is used more than once."), *NodeId));
+				continue;
+			}
+			SwitchIndexById.Add(NodeId, Index);
+		}
+		for (int32 Index = 0; Index < SwitchCount; ++Index)
+		{
+			const FHTNestedToggleSwitch& Switch = Graph.Switches[Index];
+			const FString NodeId = Trimmed(Switch.NodeId);
+			if (Switch.OptionCount < 2)
+			{
+				AddIssue({ NodeId }, FString::Printf(TEXT("Switch %s needs at least two options."), *NodeId));
+			}
+			if (Switch.InitialOption < 0 || Switch.InitialOption >= Switch.OptionCount)
+			{
+				AddIssue({ NodeId }, FString::Printf(TEXT("Switch %s initial option %d is outside 0..%d."), *NodeId, Switch.InitialOption, Switch.OptionCount - 1));
+			}
+			FString KeyError;
+			if (Trimmed(Switch.KeyName).IsEmpty())
+			{
+				AddIssue({ NodeId }, FString::Printf(TEXT("Switch %s has no key."), *NodeId));
+			}
+			else if (!ResolveInputKeySpec(Switch.KeyName, KeySpecs[Index], KeyError))
+			{
+				AddIssue({ NodeId }, FString::Printf(TEXT("Switch %s: %s"), *NodeId, *KeyError));
+			}
+			const FString RawVariable = Trimmed(Switch.VariableName);
+			if (!RawVariable.IsEmpty())
+			{
+				ExplicitNames[Index] = SanitizeNestedIdentifier(RawVariable);
+				if (ExplicitNames[Index].IsEmpty())
+				{
+					AddIssue({ NodeId }, FString::Printf(TEXT("Switch %s variable name %s must contain letters, digits or underscores."), *NodeId, *RawVariable));
+				}
+			}
+			const FString ParentId = Trimmed(Switch.ParentNodeId);
+			if (!ParentId.IsEmpty())
+			{
+				const int32* ParentIndex = SwitchIndexById.Find(ParentId);
+				if (!ParentIndex)
+				{
+					AddIssue({ NodeId }, FString::Printf(TEXT("Switch %s hangs on unknown switch %s."), *NodeId, *ParentId));
+				}
+				else if (*ParentIndex == Index)
+				{
+					AddIssue({ NodeId }, FString::Printf(TEXT("Switch %s cannot hang on itself."), *NodeId));
+				}
+				else if (Switch.ParentOption < 0 || Switch.ParentOption >= Graph.Switches[*ParentIndex].OptionCount)
+				{
+					AddIssue({ NodeId, ParentId }, FString::Printf(TEXT("Switch %s hangs on option %d of %s, which only has options 0..%d."), *NodeId, Switch.ParentOption, *ParentId, Graph.Switches[*ParentIndex].OptionCount - 1));
+				}
+			}
+		}
+		if (!OutErrors.IsEmpty())
+		{
+			return false;
+		}
+
+		auto ParentIndexOf = [&Graph, &SwitchIndexById](const int32 Index) -> int32
+		{
+			const FString ParentId = Trimmed(Graph.Switches[Index].ParentNodeId);
+			const int32* ParentIndex = ParentId.IsEmpty() ? nullptr : SwitchIndexById.Find(ParentId);
+			return ParentIndex ? *ParentIndex : INDEX_NONE;
+		};
+		for (int32 Index = 0; Index < SwitchCount; ++Index)
+		{
+			TArray<int32> Chain = { Index };
+			int32 Cursor = ParentIndexOf(Index);
+			while (Cursor != INDEX_NONE)
+			{
+				if (Chain.Contains(Cursor))
+				{
+					TArray<FString> Ids;
+					for (const int32 ChainIndex : Chain)
+					{
+						Ids.Add(Trimmed(Graph.Switches[ChainIndex].NodeId));
+					}
+					AddIssue(Ids, FString::Printf(TEXT("Switches %s form a parent cycle."), *JoinNodeIds(Ids)));
+					break;
+				}
+				Chain.Add(Cursor);
+				Cursor = ParentIndexOf(Cursor);
+			}
+		}
+		if (!OutErrors.IsEmpty())
+		{
+			return false;
+		}
+
+		// Switches that share a key or an explicit variable name share one state variable.
+		FNestedUnionFind Groups(SwitchCount);
+		TMap<FString, int32> FirstByKey;
+		TMap<FString, int32> FirstByName;
+		for (int32 Index = 0; Index < SwitchCount; ++Index)
+		{
+			const FString CanonicalKey = MakeNestedCanonicalKey(KeySpecs[Index]);
+			if (const int32* First = FirstByKey.Find(CanonicalKey))
+			{
+				Groups.Union(*First, Index);
+			}
+			else
+			{
+				FirstByKey.Add(CanonicalKey, Index);
+			}
+			if (!ExplicitNames[Index].IsEmpty())
+			{
+				if (const int32* First = FirstByName.Find(ExplicitNames[Index]))
+				{
+					Groups.Union(*First, Index);
+				}
+				else
+				{
+					FirstByName.Add(ExplicitNames[Index], Index);
+				}
+			}
+		}
+
+		TMap<int32, int32> VariableIndexByRoot;
+		OutCompiled.SwitchVariableIndices.SetNum(SwitchCount);
+		for (int32 Index = 0; Index < SwitchCount; ++Index)
+		{
+			const int32 Root = Groups.Find(Index);
+			if (const int32* Existing = VariableIndexByRoot.Find(Root))
+			{
+				OutCompiled.SwitchVariableIndices[Index] = *Existing;
+				OutCompiled.Variables[*Existing].SwitchIndices.Add(Index);
+				continue;
+			}
+			const int32 VariableIndex = OutCompiled.Variables.AddDefaulted();
+			VariableIndexByRoot.Add(Root, VariableIndex);
+			OutCompiled.SwitchVariableIndices[Index] = VariableIndex;
+			OutCompiled.Variables[VariableIndex].SwitchIndices.Add(Index);
+		}
+
+		TMap<FName, int32> VariableIndexByName;
+		for (int32 VariableIndex = 0; VariableIndex < OutCompiled.Variables.Num(); ++VariableIndex)
+		{
+			FHTNestedToggleStateVariable& Variable = OutCompiled.Variables[VariableIndex];
+			TArray<FString> MemberIds;
+			TArray<FString> DistinctExplicitNames;
+			TArray<int32> DistinctOptionCounts;
+			TArray<int32> DistinctInitialOptions;
+			TArray<FString> DistinctCanonicalKeys;
+			for (const int32 SwitchIndex : Variable.SwitchIndices)
+			{
+				const FHTNestedToggleSwitch& Switch = Graph.Switches[SwitchIndex];
+				MemberIds.Add(Trimmed(Switch.NodeId));
+				if (!ExplicitNames[SwitchIndex].IsEmpty())
+				{
+					DistinctExplicitNames.AddUnique(ExplicitNames[SwitchIndex]);
+				}
+				DistinctOptionCounts.AddUnique(Switch.OptionCount);
+				DistinctInitialOptions.AddUnique(Switch.InitialOption);
+				const FString CanonicalKey = MakeNestedCanonicalKey(KeySpecs[SwitchIndex]);
+				if (!DistinctCanonicalKeys.Contains(CanonicalKey))
+				{
+					DistinctCanonicalKeys.Add(CanonicalKey);
+					Variable.KeyNames.Add(Switch.KeyName);
+				}
+			}
+			const FString SharedBy = DistinctCanonicalKeys.Num() == 1
+				? FString::Printf(TEXT("key %s"), *DistinctCanonicalKeys[0])
+				: FString(TEXT("a variable name"));
+			if (DistinctExplicitNames.Num() > 1)
+			{
+				AddIssue(MemberIds, FString::Printf(TEXT("Switches %s share %s and therefore one state variable, but declare different variable names: %s."), *JoinNodeIds(MemberIds), *SharedBy, *FString::Join(DistinctExplicitNames, TEXT(", "))));
+			}
+			if (DistinctOptionCounts.Num() > 1)
+			{
+				AddIssue(MemberIds, FString::Printf(TEXT("Switches %s share %s and must have the same option count (found %s)."), *JoinNodeIds(MemberIds), *SharedBy, *FString::JoinBy(DistinctOptionCounts, TEXT(", "), [](const int32 Count) { return FString::FromInt(Count); })));
+			}
+			if (DistinctInitialOptions.Num() > 1)
+			{
+				AddIssue(MemberIds, FString::Printf(TEXT("Switches %s share %s and must have the same initial option (found %s)."), *JoinNodeIds(MemberIds), *SharedBy, *FString::JoinBy(DistinctInitialOptions, TEXT(", "), [](const int32 Option) { return FString::FromInt(Option); })));
+			}
+			const FHTNestedToggleSwitch& FirstSwitch = Graph.Switches[Variable.SwitchIndices[0]];
+			Variable.OptionCount = FirstSwitch.OptionCount;
+			Variable.InitialOption = FirstSwitch.InitialOption;
+			FString VariableName = DistinctExplicitNames.Num() > 0 ? DistinctExplicitNames[0] : FString();
+			if (VariableName.IsEmpty())
+			{
+				FString Suffix = SanitizeNestedIdentifier(FirstSwitch.NodeId);
+				if (Suffix.IsEmpty())
+				{
+					Suffix = FString::Printf(TEXT("Switch%d"), Variable.SwitchIndices[0] + 1);
+				}
+				VariableName = OutCompiled.Name + TEXT("_") + Suffix;
+			}
+			Variable.VariableName = FName(*VariableName);
+			if (const int32* Other = VariableIndexByName.Find(Variable.VariableName))
+			{
+				TArray<FString> Ids = MemberIds;
+				for (const int32 SwitchIndex : OutCompiled.Variables[*Other].SwitchIndices)
+				{
+					Ids.Add(Trimmed(Graph.Switches[SwitchIndex].NodeId));
+				}
+				AddIssue(Ids, FString::Printf(TEXT("Switches %s resolve to the same variable name %s but do not share a key. Give them the same key or different variable names."), *JoinNodeIds(Ids), *VariableName));
+			}
+			else
+			{
+				VariableIndexByName.Add(Variable.VariableName, VariableIndex);
+			}
+		}
+
+		for (int32 Index = 0; Index < SwitchCount; ++Index)
+		{
+			for (int32 Cursor = ParentIndexOf(Index); Cursor != INDEX_NONE; Cursor = ParentIndexOf(Cursor))
+			{
+				if (OutCompiled.SwitchVariableIndices[Cursor] == OutCompiled.SwitchVariableIndices[Index])
+				{
+					const FString NodeId = Trimmed(Graph.Switches[Index].NodeId);
+					const FString AncestorId = Trimmed(Graph.Switches[Cursor].NodeId);
+					AddIssue({ NodeId, AncestorId }, FString::Printf(TEXT("Switch %s shares a state variable with its ancestor %s, so its parts could never show. Use a different key."), *NodeId, *AncestorId));
+					break;
+				}
+			}
+		}
+
+		TMap<int32, FString> PartIdByMaterialID;
+		TMap<FString, int32> PartIndexById;
+		for (int32 PartIndex = 0; PartIndex < Graph.Parts.Num(); ++PartIndex)
+		{
+			const FHTNestedTogglePart& Part = Graph.Parts[PartIndex];
+			const FString NodeId = Trimmed(Part.NodeId);
+			if (NodeId.IsEmpty())
+			{
+				AddIssue({}, FString::Printf(TEXT("Part %d has no node id."), PartIndex + 1));
+				continue;
+			}
+			if (PartIndexById.Contains(NodeId))
+			{
+				AddIssue({ NodeId }, FString::Printf(TEXT("Part node id %s is used more than once."), *NodeId));
+				continue;
+			}
+			PartIndexById.Add(NodeId, PartIndex);
+
+			FHTNestedToggleCompiledPart Compiled;
+			Compiled.PartIndex = PartIndex;
+			if (Part.MaterialIDs.IsEmpty())
+			{
+				AddIssue({ NodeId }, FString::Printf(TEXT("Part %s has no material ID."), *NodeId));
+			}
+			for (const int32 MaterialID : Part.MaterialIDs)
+			{
+				if (MaterialID < 0)
+				{
+					AddIssue({ NodeId }, FString::Printf(TEXT("Part %s has a negative material ID %d."), *NodeId, MaterialID));
+					continue;
+				}
+				if (Compiled.MaterialIDs.Contains(MaterialID))
+				{
+					AddIssue({ NodeId }, FString::Printf(TEXT("Part %s lists material ID %d twice."), *NodeId, MaterialID));
+					continue;
+				}
+				if (const FString* OtherPart = PartIdByMaterialID.Find(MaterialID))
+				{
+					AddIssue({ *OtherPart, NodeId }, FString::Printf(TEXT("Material ID %d is connected in parts %s and %s. A part can only be reached through one path."), MaterialID, **OtherPart, *NodeId));
+					continue;
+				}
+				PartIdByMaterialID.Add(MaterialID, NodeId);
+				Compiled.MaterialIDs.Add(MaterialID);
+			}
+
+			bool bPathValid = true;
+			for (int32 StepIndex = 0; StepIndex < Part.Path.Num() && bPathValid; ++StepIndex)
+			{
+				const FHTNestedTogglePathStep& Step = Part.Path[StepIndex];
+				const FString StepId = Trimmed(Step.SwitchNodeId);
+				const int32* SwitchIndex = SwitchIndexById.Find(StepId);
+				if (!SwitchIndex)
+				{
+					AddIssue({ NodeId }, FString::Printf(TEXT("Part %s path refers to unknown switch %s."), *NodeId, *StepId));
+					bPathValid = false;
+					break;
+				}
+				const FHTNestedToggleSwitch& Switch = Graph.Switches[*SwitchIndex];
+				if (Step.Option < 0 || Step.Option >= Switch.OptionCount)
+				{
+					AddIssue({ NodeId, StepId }, FString::Printf(TEXT("Part %s hangs on option %d of switch %s, which only has options 0..%d."), *NodeId, Step.Option, *StepId, Switch.OptionCount - 1));
+					bPathValid = false;
+					break;
+				}
+				const int32 ExpectedParent = StepIndex == 0 ? INDEX_NONE : SwitchIndexById.FindChecked(Trimmed(Part.Path[StepIndex - 1].SwitchNodeId));
+				const int32 ActualParent = ParentIndexOf(*SwitchIndex);
+				const bool bParentMatches = ActualParent == ExpectedParent
+					&& (ExpectedParent == INDEX_NONE || Switch.ParentOption == Part.Path[StepIndex - 1].Option);
+				if (!bParentMatches)
+				{
+					AddIssue({ NodeId, StepId }, FString::Printf(TEXT("Part %s path step %d (%s option %d) does not follow the switch's parent attachment."), *NodeId, StepIndex + 1, *StepId, Step.Option));
+					bPathValid = false;
+					break;
+				}
+				FHTNestedToggleCondition& Condition = Compiled.Conditions.AddDefaulted_GetRef();
+				Condition.VariableIndex = OutCompiled.SwitchVariableIndices[*SwitchIndex];
+				Condition.Option = Step.Option;
+			}
+			if (bPathValid)
+			{
+				OutCompiled.Parts.Add(MoveTemp(Compiled));
+			}
+		}
+
+		if (!OutErrors.IsEmpty())
+		{
+			OutCompiled.Parts.Empty();
+			return false;
+		}
+		return true;
+	}
+
+	// Same recovery strategy as RemoveTextureTunerGroup, keyed by an arbitrary comment prefix.
+	static void RemoveManagedCommentGroups(UEdGraph* Graph, const FString& Prefix)
+	{
+		if (!Graph)
+		{
+			return;
+		}
+		TArray<UEdGraphNode_Comment*> Comments;
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (UEdGraphNode_Comment* Comment = Cast<UEdGraphNode_Comment>(Node); Comment && Comment->NodeComment.StartsWith(Prefix))
+			{
+				Comments.Add(Comment);
+			}
+		}
+		for (UEdGraphNode_Comment* Comment : Comments)
+		{
+			TArray<UEdGraphNode*> Members = GetNodesUnderComment(Comment);
+			// Comment membership is editor-only and is not serialized. Recover the
+			// generated group from its saved bounds when reopening an AnimBP.
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				if (!Node || Node->IsA<UEdGraphNode_Comment>()
+					|| (Node->IsA<UK2Node_Event>() && !Node->IsA<UK2Node_CustomEvent>())
+					|| Node->IsA<UK2Node_ExecutionSequence>())
+				{
+					continue; // Shared animation entry/dispatch nodes are never generated by a tree.
+				}
+				if (Node->NodePosX >= Comment->NodePosX && Node->NodePosX <= Comment->NodePosX + Comment->NodeWidth
+					&& Node->NodePosY >= Comment->NodePosY && Node->NodePosY <= Comment->NodePosY + Comment->NodeHeight)
+				{
+					Members.AddUnique(Node);
+				}
+			}
+			for (UEdGraphNode* Node : Members)
+			{
+				Node->BreakAllNodeLinks();
+				Graph->RemoveNode(Node);
+			}
+			Graph->RemoveNode(Comment);
+		}
+	}
+
+	static void RemoveCustomEventNodes(UEdGraph* Graph, const FName EventName)
+	{
+		TArray<UEdGraphNode*> Stale;
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (UK2Node_CustomEvent* Event = Cast<UK2Node_CustomEvent>(Node); Event && Event->CustomFunctionName == EventName)
+			{
+				Stale.Add(Event);
+			}
+		}
+		for (UEdGraphNode* Node : Stale)
+		{
+			Node->BreakAllNodeLinks();
+			Graph->RemoveNode(Node);
+		}
+	}
+
+	struct FNestedGenerationContext
+	{
+		UBlueprint* AnimBlueprint = nullptr;
+		UClass* SaveClass = nullptr;
+		UEdGraph* Graph = nullptr;
+		FName ApplyEvent;
+		FString CharacterName;
+		FHTBlueprintToggleGeneratorParams SectionParams;
+		TArray<UEdGraphNode*> Nodes;
+
+		void Track(std::initializer_list<UEdGraphNode*> NewNodes)
+		{
+			for (UEdGraphNode* Node : NewNodes)
+			{
+				if (Node)
+				{
+					Nodes.Add(Node);
+				}
+			}
+		}
+	};
+
+	static UK2Node_CallFunction* SpawnNestedApplyCall(FNestedGenerationContext& Context, const FVector2D Position, FHTBlueprintToggleGeneratorResult& Result)
+	{
+		UClass* AnimClass = Context.AnimBlueprint->SkeletonGeneratedClass ? Context.AnimBlueprint->SkeletonGeneratedClass.Get() : Context.AnimBlueprint->GeneratedClass.Get();
+		UK2Node_CallFunction* Call = SpawnCall(Context.Graph, AnimClass, Context.ApplyEvent, Position, Result);
+		Context.Track({ Call });
+		return Call;
+	}
+
+	// HTN_Apply_<Name>: every managed material ID gets visible = AND(variable == option) over its path.
+	static bool BuildNestedApplyEvent(
+		FNestedGenerationContext& Context,
+		const FHTNestedToggleCompiledGraph& Compiled,
+		const FVector2D Base,
+		float& OutHeight,
+		FHTBlueprintToggleGeneratorResult& Result)
+	{
+		UEdGraph* Graph = Context.Graph;
+		UK2Node_CustomEvent* Event = SpawnCustomEvent(Graph, Context.ApplyEvent, Base);
+		UK2Node_CallFunction* Owning = SpawnCall(Graph, UAnimInstance::StaticClass(), TEXT("GetOwningComponent"), Base + FVector2D(0, 200), Result);
+		if (!Event || !Owning)
+		{
+			return false;
+		}
+		Context.Track({ Event, Owning });
+		UEdGraphPin* OwningPin = FindAnyPin(Owning, UEdGraphSchema_K2::PN_ReturnValue);
+		UEdGraphPin* Exec = GetSchema()->FindExecutionPin(*Event, EGPD_Output);
+		float RowY = Base.Y + 420.0f;
+		for (const FHTNestedToggleCompiledPart& Part : Compiled.Parts)
+		{
+			TArray<UEdGraphPin*> ConditionPins;
+			for (int32 ConditionIndex = 0; ConditionIndex < Part.Conditions.Num(); ++ConditionIndex)
+			{
+				const FHTNestedToggleCondition& Condition = Part.Conditions[ConditionIndex];
+				const FName VariableName = Compiled.Variables[Condition.VariableIndex].VariableName;
+				const float ConditionY = RowY + ConditionIndex * 170.0f;
+				UK2Node_VariableGet* GetVariable = SpawnVariableGet(Graph, VariableName, nullptr, FVector2D(Base.X, ConditionY + 90.0f));
+				UK2Node_CallFunction* Equal = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("EqualEqual_IntInt"), FVector2D(Base.X + 300.0f, ConditionY), Result);
+				if (!GetVariable || !Equal)
+				{
+					return false;
+				}
+				Context.Track({ GetVariable, Equal });
+				SetDefaultValue(FindAnyPin(Equal, TEXT("B")), FString::FromInt(Condition.Option));
+				Connect(FindAnyPin(GetVariable, VariableName), FindAnyPin(Equal, TEXT("A")), Result, TEXT("Toggle tree state -> Equal"));
+				ConditionPins.Add(FindAnyPin(Equal, UEdGraphSchema_K2::PN_ReturnValue));
+			}
+
+			UEdGraphPin* VisiblePin = nullptr;
+			if (ConditionPins.Num() == 1)
+			{
+				VisiblePin = ConditionPins[0];
+			}
+			else if (ConditionPins.Num() > 1)
+			{
+				UK2Node_CommutativeAssociativeBinaryOperator* And = SpawnBooleanOperator(Graph, TEXT("BooleanAND"), FVector2D(Base.X + 640.0f, RowY + 40.0f), ConditionPins.Num(), Result);
+				if (!And)
+				{
+					return false;
+				}
+				Context.Track({ And });
+				for (int32 ConditionIndex = 0; ConditionIndex < ConditionPins.Num(); ++ConditionIndex)
+				{
+					Connect(ConditionPins[ConditionIndex], And->GetInputPin(ConditionIndex), Result, TEXT("Toggle tree condition -> AND"));
+				}
+				VisiblePin = FindAnyPin(And, UEdGraphSchema_K2::PN_ReturnValue);
+			}
+
+			for (int32 MaterialIndex = 0; MaterialIndex < Part.MaterialIDs.Num(); ++MaterialIndex)
+			{
+				UK2Node_CallFunction* Show = SpawnShowMaterialSectionNode(
+					Graph,
+					FVector2D(Base.X + 980.0f + MaterialIndex * 440.0f, RowY),
+					Part.MaterialIDs[MaterialIndex],
+					true,
+					Context.SectionParams,
+					OwningPin,
+					Result,
+					&Context.Nodes);
+				if (!Show)
+				{
+					return false;
+				}
+				if (VisiblePin)
+				{
+					Connect(VisiblePin, FindAnyPin(Show, TEXT("bShow")), Result, TEXT("Toggle tree visible -> Show Material Section"));
+				}
+				Connect(Exec, GetSchema()->FindExecutionPin(*Show, EGPD_Input), Result, TEXT("Toggle tree apply chain"));
+				Exec = GetSchema()->FindExecutionPin(*Show, EGPD_Output);
+			}
+			RowY += FMath::Max(280.0f, Part.Conditions.Num() * 170.0f + 110.0f);
+		}
+		OutHeight = RowY - Base.Y;
+		return true;
+	}
+
+	// One SaveGame restore block per state variable. Every exit (restored, created, cast failed)
+	// continues to OutContinuePins so the next block or the final Apply always runs.
+	static bool BuildNestedInitVariable(
+		FNestedGenerationContext& Context,
+		const FHTNestedToggleStateVariable& Variable,
+		const TArray<UEdGraphPin*>& EntryPins,
+		const FVector2D Base,
+		TArray<UEdGraphPin*>& OutContinuePins,
+		FHTBlueprintToggleGeneratorResult& Result)
+	{
+		UEdGraph* Graph = Context.Graph;
+		UClass* SaveClass = Context.SaveClass;
+		const FName SaveVariable(*(Variable.VariableName.ToString() + TEXT("Save")));
+		const FString SlotName = MakeNestedSlotName(Variable.VariableName, Context.CharacterName);
+		const float TrueY = Base.Y - 120.0f;
+		const float FalseY = Base.Y + 420.0f;
+
+		UK2Node_CallFunction* DoesSaveExist = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("DoesSaveGameExist"), Base, Result);
+		UK2Node_IfThenElse* Branch = SpawnBranch(Graph, Base + FVector2D(340, 0));
+		UK2Node_CallFunction* LoadGame = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("LoadGameFromSlot"), FVector2D(Base.X + 700, TrueY), Result);
+		UK2Node_DynamicCast* CastSave = SpawnCast(Graph, SaveClass, FVector2D(Base.X + 1060, TrueY));
+		UK2Node_VariableGet* GetSaveValue = SpawnVariableGet(Graph, SaveVariable, SaveClass, FVector2D(Base.X + 1380, TrueY + 150));
+		UK2Node_CallFunction* ClampSaved = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("Clamp"), FVector2D(Base.X + 1660, TrueY + 150), Result);
+		UK2Node_VariableSet* SetAnimValue = SpawnVariableSet(Graph, Variable.VariableName, nullptr, FVector2D(Base.X + 1960, TrueY));
+		UK2Node_CallFunction* CreateSave = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("CreateSaveGameObject"), FVector2D(Base.X + 700, FalseY), Result);
+		UK2Node_VariableGet* GetAnimDefault = SpawnVariableGet(Graph, Variable.VariableName, nullptr, FVector2D(Base.X + 1060, FalseY + 170));
+		UK2Node_VariableSet* SetSaveDefault = SpawnVariableSet(Graph, SaveVariable, SaveClass, FVector2D(Base.X + 1380, FalseY));
+		UK2Node_CallFunction* SaveDefaultSlot = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("SaveGameToSlot"), FVector2D(Base.X + 1720, FalseY), Result);
+		if (!DoesSaveExist || !Branch || !LoadGame || !CastSave || !GetSaveValue || !ClampSaved || !SetAnimValue || !CreateSave || !GetAnimDefault || !SetSaveDefault || !SaveDefaultSlot)
+		{
+			return false;
+		}
+		Context.Track({ DoesSaveExist, Branch, LoadGame, CastSave, GetSaveValue, ClampSaved, SetAnimValue, CreateSave, GetAnimDefault, SetSaveDefault, SaveDefaultSlot });
+
+		ConfigureSaveSlotPins(DoesSaveExist, SlotName);
+		ConfigureSaveSlotPins(LoadGame, SlotName);
+		ConfigureSaveSlotPins(SaveDefaultSlot, SlotName);
+		SetDefaultObject(FindAnyPin(CreateSave, TEXT("SaveGameClass")), SaveClass);
+		SetDefaultValue(FindAnyPin(ClampSaved, TEXT("Min")), TEXT("0"));
+		SetDefaultValue(FindAnyPin(ClampSaved, TEXT("Max")), FString::FromInt(Variable.OptionCount - 1));
+
+		for (UEdGraphPin* EntryPin : EntryPins)
+		{
+			Connect(EntryPin, GetSchema()->FindExecutionPin(*DoesSaveExist, EGPD_Input), Result, TEXT("Toggle tree init -> DoesSaveGameExist"));
+		}
+		Connect(GetSchema()->FindExecutionPin(*DoesSaveExist, EGPD_Output), GetSchema()->FindExecutionPin(*Branch, EGPD_Input), Result, TEXT("DoesSaveGameExist -> Branch"));
+		Connect(FindAnyPin(DoesSaveExist, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(Branch, UEdGraphSchema_K2::PN_Condition), Result, TEXT("DoesSaveGameExist -> Branch Condition"));
+		Connect(FindAnyPin(Branch, UEdGraphSchema_K2::PN_Then), GetSchema()->FindExecutionPin(*LoadGame, EGPD_Input), Result, TEXT("Save exists -> LoadGameFromSlot"));
+		Connect(GetSchema()->FindExecutionPin(*LoadGame, EGPD_Output), GetSchema()->FindExecutionPin(*CastSave, EGPD_Input), Result, TEXT("LoadGameFromSlot -> Cast"));
+		Connect(FindAnyPin(LoadGame, UEdGraphSchema_K2::PN_ReturnValue), CastSave->GetCastSourcePin(), Result, TEXT("Loaded save -> Cast Object"));
+		Connect(CastSave->GetCastResultPin(), FindSelfPin(GetSaveValue), Result, TEXT("Cast Result -> saved state target"));
+		Connect(CastSave->GetValidCastPin(), GetSchema()->FindExecutionPin(*SetAnimValue, EGPD_Input), Result, TEXT("Cast valid -> Set state"));
+		Connect(FindAnyPin(GetSaveValue, SaveVariable), FindAnyPin(ClampSaved, TEXT("Value")), Result, TEXT("Saved state -> Clamp"));
+		Connect(FindAnyPin(ClampSaved, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SetAnimValue, Variable.VariableName), Result, TEXT("Clamped state -> Set state"));
+		Connect(FindAnyPin(Branch, UEdGraphSchema_K2::PN_Else), GetSchema()->FindExecutionPin(*CreateSave, EGPD_Input), Result, TEXT("No save -> CreateSaveGameObject"));
+		Connect(GetSchema()->FindExecutionPin(*CreateSave, EGPD_Output), GetSchema()->FindExecutionPin(*SetSaveDefault, EGPD_Input), Result, TEXT("CreateSave -> Set default"));
+		Connect(FindAnyPin(CreateSave, UEdGraphSchema_K2::PN_ReturnValue), FindSelfPin(SetSaveDefault), Result, TEXT("CreateSave -> Set default target"));
+		Connect(FindAnyPin(GetAnimDefault, Variable.VariableName), FindAnyPin(SetSaveDefault, SaveVariable), Result, TEXT("Initial option -> Save default"));
+		Connect(GetSchema()->FindExecutionPin(*SetSaveDefault, EGPD_Output), GetSchema()->FindExecutionPin(*SaveDefaultSlot, EGPD_Input), Result, TEXT("Set default -> SaveGameToSlot"));
+		Connect(FindAnyPin(CreateSave, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SaveDefaultSlot, TEXT("SaveGameObject")), Result, TEXT("CreateSave -> SaveGameToSlot"));
+
+		OutContinuePins = {
+			GetSchema()->FindExecutionPin(*SetAnimValue, EGPD_Output),
+			CastSave->GetInvalidCastPin(),
+			GetSchema()->FindExecutionPin(*SaveDefaultSlot, EGPD_Output)
+		};
+		return true;
+	}
+
+	// One key handler per (variable, key): pressed && rendered -> (state + 1) % N -> save -> Apply.
+	// The parent condition is deliberately not checked, matching LoyalTools. Handlers are chained:
+	// every exit of one handler enters the next, so the chain costs one pin on the shared event.
+	static bool BuildNestedKeyHandler(
+		FNestedGenerationContext& Context,
+		const FHTNestedToggleStateVariable& Variable,
+		const FString& RawKeyName,
+		const TArray<UEdGraphPin*>& EntryPins,
+		const FVector2D Base,
+		TArray<UEdGraphPin*>& OutContinuePins,
+		FHTBlueprintToggleGeneratorResult& Result)
+	{
+		UEdGraph* Graph = Context.Graph;
+		UClass* SaveClass = Context.SaveClass;
+		FInputKeySpec KeySpec;
+		FString KeyError;
+		if (!ResolveInputKeySpec(RawKeyName, KeySpec, KeyError))
+		{
+			Result.Errors.Add(KeyError);
+			return false;
+		}
+		const FName SaveVariable(*(Variable.VariableName.ToString() + TEXT("Save")));
+		const FString SlotName = MakeNestedSlotName(Variable.VariableName, Context.CharacterName);
+		const float ModifierOffset = KeySpec.HasModifier() ? 300.0f : 0.0f;
+
+		UK2Node_CallFunction* GetController = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("GetPlayerController"), Base + FVector2D(0, 120), Result);
+		UK2Node_CallFunction* WasPressed = SpawnCall(Graph, APlayerController::StaticClass(), TEXT("WasInputKeyJustPressed"), Base + FVector2D(340, 60), Result);
+		UK2Node_CallFunction* ModifierRightDown = nullptr;
+		UK2Node_CallFunction* ModifierLeftDown = nullptr;
+		UK2Node_CommutativeAssociativeBinaryOperator* ModifierOr = nullptr;
+		if (KeySpec.HasModifier())
+		{
+			ModifierRightDown = SpawnCall(Graph, APlayerController::StaticClass(), TEXT("IsInputKeyDown"), Base + FVector2D(340, 240), Result);
+			ModifierLeftDown = SpawnCall(Graph, APlayerController::StaticClass(), TEXT("IsInputKeyDown"), Base + FVector2D(340, 420), Result);
+			ModifierOr = SpawnBooleanOperator(Graph, TEXT("BooleanOR"), Base + FVector2D(700, 330), 2, Result);
+		}
+		UK2Node_CallFunction* GetOwning = SpawnCall(Graph, UAnimInstance::StaticClass(), TEXT("GetOwningComponent"), Base + FVector2D(340, 340 + ModifierOffset), Result);
+		UK2Node_CallFunction* WasRendered = SpawnCall(Graph, UPrimitiveComponent::StaticClass(), TEXT("WasRecentlyRendered"), Base + FVector2D(700, 340 + ModifierOffset), Result);
+		UK2Node_CommutativeAssociativeBinaryOperator* And = SpawnBooleanOperator(Graph, TEXT("BooleanAND"), Base + FVector2D(1040, 190 + ModifierOffset * 0.5f), KeySpec.HasModifier() ? 3 : 2, Result);
+		UK2Node_IfThenElse* Branch = SpawnBranch(Graph, Base + FVector2D(1380, 0));
+		UK2Node_VariableGet* GetState = SpawnVariableGet(Graph, Variable.VariableName, nullptr, Base + FVector2D(1720, 190));
+		UK2Node_CallFunction* Add = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("Add_IntInt"), Base + FVector2D(1960, 190), Result);
+		UK2Node_CallFunction* Mod = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("Percent_IntInt"), Base + FVector2D(2200, 190), Result);
+		UK2Node_VariableSet* SetState = SpawnVariableSet(Graph, Variable.VariableName, nullptr, Base + FVector2D(2460, 0));
+		UK2Node_CallFunction* CreateSave = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("CreateSaveGameObject"), Base + FVector2D(2800, 0), Result);
+		UK2Node_VariableSet* SetSaveValue = SpawnVariableSet(Graph, SaveVariable, SaveClass, Base + FVector2D(3140, 0));
+		UK2Node_CallFunction* SaveSlot = SpawnCall(Graph, UGameplayStatics::StaticClass(), TEXT("SaveGameToSlot"), Base + FVector2D(3480, 0), Result);
+		UK2Node_CallFunction* Apply = SpawnNestedApplyCall(Context, Base + FVector2D(3840, 0), Result);
+		if (!GetController || !WasPressed || !GetOwning || !WasRendered || !And || !Branch || !GetState || !Add || !Mod || !SetState || !CreateSave || !SetSaveValue || !SaveSlot || !Apply)
+		{
+			return false;
+		}
+		if (KeySpec.HasModifier() && (!ModifierRightDown || !ModifierLeftDown || !ModifierOr))
+		{
+			return false;
+		}
+		Context.Track({ GetController, WasPressed, ModifierRightDown, ModifierLeftDown, ModifierOr, GetOwning, WasRendered, And, Branch, GetState, Add, Mod, SetState, CreateSave, SetSaveValue, SaveSlot });
+
+		SetDefaultValue(FindAnyPin(GetController, TEXT("PlayerIndex")), TEXT("0"));
+		SetDefaultValue(FindAnyPin(WasPressed, TEXT("Key")), KeySpec.MainKey.GetFName().ToString());
+		if (KeySpec.HasModifier())
+		{
+			FKey LeftModifierKey;
+			FKey RightModifierKey;
+			GetModifierKeys(KeySpec.Modifier, LeftModifierKey, RightModifierKey);
+			SetDefaultValue(FindAnyPin(ModifierRightDown, TEXT("Key")), RightModifierKey.GetFName().ToString());
+			SetDefaultValue(FindAnyPin(ModifierLeftDown, TEXT("Key")), LeftModifierKey.GetFName().ToString());
+		}
+		SetDefaultValue(FindAnyPin(WasRendered, TEXT("Tolerance")), TEXT("0.2"));
+		SetDefaultValue(FindAnyPin(Add, TEXT("B")), TEXT("1"));
+		SetDefaultValue(FindAnyPin(Mod, TEXT("B")), FString::FromInt(Variable.OptionCount));
+		SetDefaultObject(FindAnyPin(CreateSave, TEXT("SaveGameClass")), SaveClass);
+		ConfigureSaveSlotPins(SaveSlot, SlotName);
+
+		UEdGraphPin* ControllerPin = FindAnyPin(GetController, UEdGraphSchema_K2::PN_ReturnValue);
+		Connect(ControllerPin, FindSelfPin(WasPressed), Result, TEXT("PlayerController -> WasInputKeyJustPressed"));
+		Connect(FindAnyPin(WasPressed, UEdGraphSchema_K2::PN_ReturnValue), And->GetInputPin(0), Result, TEXT("WasPressed -> AND"));
+		if (KeySpec.HasModifier())
+		{
+			Connect(ControllerPin, FindSelfPin(ModifierRightDown), Result, TEXT("PlayerController -> right modifier"));
+			Connect(ControllerPin, FindSelfPin(ModifierLeftDown), Result, TEXT("PlayerController -> left modifier"));
+			Connect(FindAnyPin(ModifierRightDown, UEdGraphSchema_K2::PN_ReturnValue), ModifierOr->GetInputPin(0), Result, TEXT("Right modifier -> OR"));
+			Connect(FindAnyPin(ModifierLeftDown, UEdGraphSchema_K2::PN_ReturnValue), ModifierOr->GetInputPin(1), Result, TEXT("Left modifier -> OR"));
+			Connect(FindAnyPin(ModifierOr, UEdGraphSchema_K2::PN_ReturnValue), And->GetInputPin(1), Result, TEXT("Modifier OR -> AND"));
+			Connect(FindAnyPin(WasRendered, UEdGraphSchema_K2::PN_ReturnValue), And->GetInputPin(2), Result, TEXT("WasRendered -> AND"));
+		}
+		else
+		{
+			Connect(FindAnyPin(WasRendered, UEdGraphSchema_K2::PN_ReturnValue), And->GetInputPin(1), Result, TEXT("WasRendered -> AND"));
+		}
+		Connect(FindAnyPin(GetOwning, UEdGraphSchema_K2::PN_ReturnValue), FindSelfPin(WasRendered), Result, TEXT("OwningComponent -> WasRecentlyRendered"));
+		for (UEdGraphPin* EntryPin : EntryPins)
+		{
+			Connect(EntryPin, GetSchema()->FindExecutionPin(*Branch, EGPD_Input), Result, TEXT("Toggle tree update -> Branch"));
+		}
+		Connect(FindAnyPin(And, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(Branch, UEdGraphSchema_K2::PN_Condition), Result, TEXT("AND -> Branch condition"));
+		Connect(FindAnyPin(GetState, Variable.VariableName), FindAnyPin(Add, TEXT("A")), Result, TEXT("State -> Add"));
+		Connect(FindAnyPin(Add, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(Mod, TEXT("A")), Result, TEXT("Add -> Percent"));
+		Connect(FindAnyPin(Branch, UEdGraphSchema_K2::PN_Then), GetSchema()->FindExecutionPin(*SetState, EGPD_Input), Result, TEXT("Pressed -> Set state"));
+		Connect(FindAnyPin(Mod, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SetState, Variable.VariableName), Result, TEXT("Percent -> Set state"));
+		Connect(GetSchema()->FindExecutionPin(*SetState, EGPD_Output), GetSchema()->FindExecutionPin(*CreateSave, EGPD_Input), Result, TEXT("Set state -> CreateSave"));
+		Connect(GetSchema()->FindExecutionPin(*CreateSave, EGPD_Output), GetSchema()->FindExecutionPin(*SetSaveValue, EGPD_Input), Result, TEXT("CreateSave -> Set save"));
+		Connect(FindAnyPin(CreateSave, UEdGraphSchema_K2::PN_ReturnValue), FindSelfPin(SetSaveValue), Result, TEXT("CreateSave -> Set save target"));
+		Connect(FindSetOutputPin(SetState), FindAnyPin(SetSaveValue, SaveVariable), Result, TEXT("New state -> Set save"));
+		Connect(GetSchema()->FindExecutionPin(*SetSaveValue, EGPD_Output), GetSchema()->FindExecutionPin(*SaveSlot, EGPD_Input), Result, TEXT("Set save -> SaveGameToSlot"));
+		Connect(FindAnyPin(CreateSave, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SaveSlot, TEXT("SaveGameObject")), Result, TEXT("CreateSave -> SaveGameToSlot"));
+		Connect(GetSchema()->FindExecutionPin(*SaveSlot, EGPD_Output), GetSchema()->FindExecutionPin(*Apply, EGPD_Input), Result, TEXT("SaveGameToSlot -> Apply"));
+
+		// Both exits continue to the next handler so several keys can be handled in one frame.
+		OutContinuePins = { FindAnyPin(Branch, UEdGraphSchema_K2::PN_Else), GetSchema()->FindExecutionPin(*Apply, EGPD_Output) };
+		return true;
+	}
+
+	static FString BuildNestedMetadata(const FHTNestedToggleGraph& Graph, const FHTNestedToggleCompiledGraph& Compiled, const FName ApplyEvent)
+	{
+		TMap<FString, int32> SwitchIndexById;
+		for (int32 Index = 0; Index < Graph.Switches.Num(); ++Index)
+		{
+			SwitchIndexById.Add(Trimmed(Graph.Switches[Index].NodeId), Index);
+		}
+		// An option is empty when nothing hangs on it: no part and no child switch.
+		TSet<TPair<int32, int32>> UsedOptions;
+		for (int32 Index = 0; Index < Graph.Switches.Num(); ++Index)
+		{
+			const int32* ParentIndex = SwitchIndexById.Find(Trimmed(Graph.Switches[Index].ParentNodeId));
+			if (ParentIndex)
+			{
+				UsedOptions.Add(TPair<int32, int32>(*ParentIndex, Graph.Switches[Index].ParentOption));
+			}
+		}
+		for (const FHTNestedTogglePart& Part : Graph.Parts)
+		{
+			if (Part.Path.Num() > 0)
+			{
+				const FHTNestedTogglePathStep& Last = Part.Path.Last();
+				if (const int32* SwitchIndex = SwitchIndexById.Find(Trimmed(Last.SwitchNodeId)))
+				{
+					UsedOptions.Add(TPair<int32, int32>(*SwitchIndex, Last.Option));
+				}
+			}
+		}
+
+		FString Metadata = FString::Printf(TEXT("%s%s;Apply=%s"), NestedToggleCommentPrefix, *Compiled.Name, *ApplyEvent.ToString());
+		for (int32 Index = 0; Index < Graph.Switches.Num(); ++Index)
+		{
+			const FHTNestedToggleSwitch& Switch = Graph.Switches[Index];
+			const FHTNestedToggleStateVariable& Variable = Compiled.Variables[Compiled.SwitchVariableIndices[Index]];
+			FInputKeySpec KeySpec;
+			FString KeyError;
+			ResolveInputKeySpec(Switch.KeyName, KeySpec, KeyError);
+			const int32* ParentIndex = SwitchIndexById.Find(Trimmed(Switch.ParentNodeId));
+			const FString ParentVariable = ParentIndex ? Compiled.Variables[Compiled.SwitchVariableIndices[*ParentIndex]].VariableName.ToString() : FString();
+			const int32 ParentOption = ParentIndex ? Switch.ParentOption : INDEX_NONE;
+			FString Label = SanitizeNestedMetadataField(Switch.Label);
+			if (Label.IsEmpty())
+			{
+				Label = Variable.VariableName.ToString();
+			}
+			TArray<FString> OptionLabels;
+			for (int32 Option = 0; Option < Switch.OptionCount; ++Option)
+			{
+				FString OptionLabel = Switch.OptionLabels.IsValidIndex(Option) ? SanitizeNestedMetadataField(Switch.OptionLabels[Option]) : FString();
+				if (OptionLabel.IsEmpty() && UsedOptions.Contains(TPair<int32, int32>(Index, Option)))
+				{
+					OptionLabel = FString::FromInt(Option + 1);
+				}
+				OptionLabels.Add(OptionLabel);
+			}
+			Metadata += FString::Printf(
+				TEXT(";Switch=%s,%s,%d,%s,%d,%s,%s"),
+				*Variable.VariableName.ToString(),
+				*MakeNestedCanonicalKey(KeySpec),
+				Switch.OptionCount,
+				*ParentVariable,
+				ParentOption,
+				*Label,
+				*FString::Join(OptionLabels, TEXT("|")));
+		}
+		return Metadata;
+	}
 }
 
 FString FHTBlueprintToggleGeneratorResult::ToDisplayString() const
@@ -2670,4 +3559,273 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 	return Result;
 }
 
+FString FHTNestedToggleIssue::ToDisplayString() const
+{
+	return NodeIds.IsEmpty() ? Message : FString::Printf(TEXT("[%s] %s"), *FString::Join(NodeIds, TEXT(", ")), *Message);
+}
+
+FString FHTNestedToggleGeneratorResult::ToDisplayString() const
+{
+	TArray<FString> Lines;
+	Lines.Add(bSuccess ? TEXT("生成完成") : TEXT("生成失败"));
+	for (const FHTNestedToggleIssue& Error : Errors)
+	{
+		Lines.Add(TEXT("Error: ") + Error.ToDisplayString());
+	}
+	Lines.Append(Messages);
+	return FString::Join(Lines, TEXT("\n"));
+}
+
+FString FHTBlueprintToggleGenerator::SanitizeNestedToggleGraphName(const FString& GraphName)
+{
+	const FString Sanitized = HTToggleGenerator::SanitizeNestedIdentifier(GraphName);
+	return Sanitized.IsEmpty() ? FString(TEXT("ToggleTree")) : Sanitized;
+}
+
+FString FHTBlueprintToggleGenerator::MakeNestedToggleApplyEventName(const FString& GraphName)
+{
+	return FString(HTToggleGenerator::NestedToggleApplyPrefix) + SanitizeNestedToggleGraphName(GraphName);
+}
+
+FString FHTBlueprintToggleGenerator::MakeNestedToggleMetadataPrefix(const FString& GraphName)
+{
+	return FString(HTToggleGenerator::NestedToggleCommentPrefix) + SanitizeNestedToggleGraphName(GraphName) + TEXT(";");
+}
+
+bool FHTBlueprintToggleGenerator::CompileNestedToggleGraph(const FHTNestedToggleGraph& Graph, FHTNestedToggleCompiledGraph& OutCompiled, TArray<FHTNestedToggleIssue>& OutErrors)
+{
+	return HTToggleGenerator::CompileNestedToggleGraphImpl(Graph, OutCompiled, OutErrors);
+}
+
+FHTNestedToggleGeneratorResult FHTBlueprintToggleGenerator::GenerateNestedVisibility(const FHTNestedToggleGeneratorParams& Params)
+{
+	using namespace HTToggleGenerator;
+
+	FHTNestedToggleGeneratorResult Result;
+	FHTNestedToggleCompiledGraph Compiled;
+	if (!CompileNestedToggleGraph(Params.Graph, Compiled, Result.Errors))
+	{
+		return Result;
+	}
+	if (Compiled.Parts.IsEmpty())
+	{
+		FHTNestedToggleIssue& Issue = Result.Errors.AddDefaulted_GetRef();
+		Issue.Message = TEXT("The toggle tree has no parts. Connect at least one part to the generate node.");
+		return Result;
+	}
+
+	// Graph-building helpers report plain messages; keep them in a legacy result and merge at the end.
+	FHTBlueprintToggleGeneratorResult Inner;
+	auto Finish = [&Result, &Inner]() -> FHTNestedToggleGeneratorResult&
+	{
+		for (const FString& Error : Inner.Errors)
+		{
+			FHTNestedToggleIssue& Issue = Result.Errors.AddDefaulted_GetRef();
+			Issue.Message = Error;
+		}
+		Result.Messages.Append(Inner.Messages);
+		Result.bSuccess = Result.Errors.IsEmpty();
+		return Result;
+	};
+
+	const FScopedTransaction Transaction(LOCTEXT("GenerateNestedToggleNodes", "Generate HT Toggle Tree Nodes"));
+	UBlueprint* AnimBlueprint = LoadBlueprint(Params.AnimBlueprintPath, Inner, TEXT("Animation Blueprint"));
+	UBlueprint* SaveBlueprint = LoadBlueprint(Params.SaveGameBlueprintPath, Inner, TEXT("SaveGame Blueprint"));
+	if (!AnimBlueprint || !SaveBlueprint)
+	{
+		return Finish();
+	}
+
+	AnimBlueprint->Modify();
+	SaveBlueprint->Modify();
+	for (const FHTNestedToggleStateVariable& Variable : Compiled.Variables)
+	{
+		const FName SaveVariable(*(Variable.VariableName.ToString() + TEXT("Save")));
+		if (!EnsureIntVariable(AnimBlueprint, Variable.VariableName, Variable.InitialOption, Inner, TEXT("Animation Blueprint"))
+			|| !EnsureIntVariable(SaveBlueprint, SaveVariable, Variable.InitialOption, Inner, TEXT("SaveGame Blueprint")))
+		{
+			return Finish();
+		}
+	}
+
+	FKismetEditorUtilities::CompileBlueprint(SaveBlueprint);
+	FKismetEditorUtilities::CompileBlueprint(AnimBlueprint);
+	UClass* SaveClass = SaveBlueprint->GeneratedClass ? SaveBlueprint->GeneratedClass.Get() : SaveBlueprint->SkeletonGeneratedClass.Get();
+	if (!SaveClass)
+	{
+		Inner.Errors.Add(TEXT("The SaveGame Blueprint has no generated class."));
+		return Finish();
+	}
+	if (!SaveClass->IsChildOf(USaveGame::StaticClass()))
+	{
+		Inner.Messages.Add(FString::Printf(TEXT("Note: %s is not a USaveGame subclass; nodes are still generated."), *SaveClass->GetName()));
+	}
+
+	FNestedGenerationContext Context;
+	Context.AnimBlueprint = AnimBlueprint;
+	Context.SaveClass = SaveClass;
+	Context.Graph = FBlueprintEditorUtils::FindEventGraph(AnimBlueprint);
+	Context.ApplyEvent = FName(*MakeNestedToggleApplyEventName(Compiled.Name));
+	Context.CharacterName = Params.CharacterName;
+	Context.SectionParams.SectionIndex = Params.SectionIndex;
+	Context.SectionParams.LODIndex = Params.LODIndex;
+	if (!Context.Graph)
+	{
+		Inner.Errors.Add(TEXT("The Animation Blueprint has no Event Graph."));
+		return Finish();
+	}
+
+	// The tree is one managed region: replace it as a whole, never append.
+	RemoveManagedCommentGroups(Context.Graph, MakeNestedToggleMetadataPrefix(Compiled.Name));
+	RemoveCustomEventNodes(Context.Graph, Context.ApplyEvent);
+
+	const int32 BaseY = FindNextLayoutBaseY(Context.Graph);
+	constexpr float LeftX = -1500.0f;
+	constexpr float InitBlockHeight = 1100.0f;
+	constexpr float UpdateBlockHeight = 1000.0f;
+	int32 HandlerCount = 0;
+	for (const FHTNestedToggleStateVariable& Variable : Compiled.Variables)
+	{
+		HandlerCount += Variable.KeyNames.Num();
+	}
+	const float InitY = BaseY;
+	const float UpdateY = InitY + FMath::Max(1, Compiled.Variables.Num()) * InitBlockHeight + 200.0f;
+	const float ApplyY = UpdateY + FMath::Max(1, HandlerCount) * UpdateBlockHeight + 200.0f;
+
+	float ApplyHeight = 0.0f;
+	if (!BuildNestedApplyEvent(Context, Compiled, FVector2D(LeftX, ApplyY), ApplyHeight, Inner))
+	{
+		Inner.Errors.Add(TEXT("Could not create the toggle tree Apply event."));
+		return Finish();
+	}
+	// The Apply custom event must exist on the skeleton class before it can be called.
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(AnimBlueprint);
+
+	UEdGraphPin* InitEntry = GetEventExecutionEntry(Context.Graph, TEXT("BlueprintInitializeAnimation"), FVector2D(LeftX - 400.0f, InitY), Inner);
+	if (!InitEntry)
+	{
+		return Finish();
+	}
+	TArray<UEdGraphPin*> InitContinuePins = { InitEntry };
+	for (int32 VariableIndex = 0; VariableIndex < Compiled.Variables.Num(); ++VariableIndex)
+	{
+		TArray<UEdGraphPin*> NextPins;
+		if (!BuildNestedInitVariable(Context, Compiled.Variables[VariableIndex], InitContinuePins, FVector2D(LeftX, InitY + VariableIndex * InitBlockHeight + 300.0f), NextPins, Inner))
+		{
+			Inner.Errors.Add(FString::Printf(TEXT("Could not create the SaveGame restore nodes for %s."), *Compiled.Variables[VariableIndex].VariableName.ToString()));
+			return Finish();
+		}
+		InitContinuePins = MoveTemp(NextPins);
+	}
+	UK2Node_CallFunction* InitApply = SpawnNestedApplyCall(Context, FVector2D(LeftX + 2400.0f, InitY + FMath::Max(0, Compiled.Variables.Num() - 1) * InitBlockHeight + 300.0f), Inner);
+	if (!InitApply)
+	{
+		return Finish();
+	}
+	for (UEdGraphPin* ContinuePin : InitContinuePins)
+	{
+		Connect(ContinuePin, GetSchema()->FindExecutionPin(*InitApply, EGPD_Input), Inner, TEXT("Toggle tree init -> Apply"));
+	}
+
+	if (HandlerCount > 0)
+	{
+		UEdGraphPin* UpdateEntry = GetEventExecutionEntry(Context.Graph, TEXT("BlueprintUpdateAnimation"), FVector2D(LeftX - 400.0f, UpdateY), Inner);
+		if (!UpdateEntry)
+		{
+			return Finish();
+		}
+		TArray<UEdGraphPin*> UpdateContinuePins = { UpdateEntry };
+		int32 HandlerIndex = 0;
+		for (const FHTNestedToggleStateVariable& Variable : Compiled.Variables)
+		{
+			for (const FString& KeyName : Variable.KeyNames)
+			{
+				TArray<UEdGraphPin*> NextPins;
+				if (!BuildNestedKeyHandler(Context, Variable, KeyName, UpdateContinuePins, FVector2D(LeftX, UpdateY + HandlerIndex * UpdateBlockHeight + 200.0f), NextPins, Inner))
+				{
+					Inner.Errors.Add(FString::Printf(TEXT("Could not create the key handler for %s."), *Variable.VariableName.ToString()));
+					return Finish();
+				}
+				UpdateContinuePins = MoveTemp(NextPins);
+				++HandlerIndex;
+			}
+		}
+	}
+
+	const FString Metadata = BuildNestedMetadata(Params.Graph, Compiled, Context.ApplyEvent);
+	float MinX = LeftX;
+	float MinY = InitY;
+	float MaxX = LeftX;
+	float MaxY = ApplyY + ApplyHeight;
+	for (const UEdGraphNode* Node : Context.Nodes)
+	{
+		MinX = FMath::Min(MinX, static_cast<float>(Node->NodePosX));
+		MinY = FMath::Min(MinY, static_cast<float>(Node->NodePosY));
+		MaxX = FMath::Max(MaxX, static_cast<float>(Node->NodePosX));
+		MaxY = FMath::Max(MaxY, static_cast<float>(Node->NodePosY));
+	}
+	UEdGraphNode_Comment* Comment = SpawnCommentBox(
+		Context.Graph,
+		Metadata,
+		FVector2D(MinX - 100.0f, MinY - 300.0f),
+		FVector2D(MaxX - MinX + 900.0f, MaxY - MinY + 700.0f),
+		FLinearColor(0.34f, 0.17f, 0.06f, 1.0f));
+	AddNodesToComment(Comment, Context.Nodes);
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBlueprint);
+	FBlueprintEditorUtils::MarkBlueprintAsModified(SaveBlueprint);
+	FKismetEditorUtilities::CompileBlueprint(SaveBlueprint);
+	FKismetEditorUtilities::CompileBlueprint(AnimBlueprint);
+	if (SaveBlueprint->Status == BS_Error)
+	{
+		Inner.Errors.Add(TEXT("The SaveGame Blueprint has compile errors after generation."));
+	}
+	if (AnimBlueprint->Status == BS_Error)
+	{
+		Inner.Errors.Add(TEXT("The Animation Blueprint has compile errors after generation."));
+	}
+
+	if (Params.bSaveAssets && Inner.Errors.IsEmpty())
+	{
+		TArray<UPackage*> Packages;
+		Packages.AddUnique(AnimBlueprint->GetOutermost());
+		Packages.AddUnique(SaveBlueprint->GetOutermost());
+		TArray<UPackage*> FailedPackages;
+		FEditorFileUtils::PromptForCheckoutAndSave(Packages, false, false, &FailedPackages, true, false);
+		if (FailedPackages.Num() > 0)
+		{
+			Inner.Errors.Add(TEXT("Nodes were generated, but the assets could not be saved. Save them manually in the editor."));
+		}
+		else
+		{
+			Inner.Messages.Add(TEXT("Assets saved."));
+		}
+	}
+
+	if (Inner.Errors.IsEmpty())
+	{
+		Result.Variables = Compiled.Variables;
+		int32 MaterialCount = 0;
+		for (const FHTNestedToggleCompiledPart& Part : Compiled.Parts)
+		{
+			MaterialCount += Part.MaterialIDs.Num();
+		}
+		Inner.Messages.Add(FString::Printf(
+			TEXT("Generated toggle tree %s: %d state variable(s), %d part(s), %d material ID(s)."),
+			*Compiled.Name,
+			Compiled.Variables.Num(),
+			Compiled.Parts.Num(),
+			MaterialCount));
+		for (const FHTNestedToggleStateVariable& Variable : Compiled.Variables)
+		{
+			Inner.Messages.Add(FString::Printf(TEXT("  %s: keys %s, %d options, initial %d, slot \"%s\""),
+				*Variable.VariableName.ToString(),
+				*FString::Join(Variable.KeyNames, TEXT(" / ")),
+				Variable.OptionCount,
+				Variable.InitialOption,
+				*MakeNestedSlotName(Variable.VariableName, Params.CharacterName)));
+		}
+	}
+	return Finish();
+}
 #undef LOCTEXT_NAMESPACE
