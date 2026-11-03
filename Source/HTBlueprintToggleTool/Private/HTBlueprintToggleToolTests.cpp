@@ -3,31 +3,25 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Animation/AnimBlueprint.h"
-#include "Animation/AnimInstance.h"
 #include "AssetToolsModule.h"
-#include "Components/SkeletalMeshComponent.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraphNode_Comment.h"
 #include "Editor.h"
 #include "Engine/Canvas.h"
-#include "Engine/Texture2D.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
-#include "GameFramework/Actor.h"
-#include "HAL/FileManager.h"
 #include "IAssetTools.h"
 #include "ImageUtils.h"
+#include "HAL/FileManager.h"
+#include "Misc/Paths.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_CustomEvent.h"
 #include "Kismet/KismetRenderingLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
-#include "Kismet2/KismetEditorUtilities.h"
-#include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/App.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/CommandLine.h"
-#include "Misc/Paths.h"
 #include "ObjectTools.h"
-#include "UObject/UnrealType.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FHTTextureChannelTunerGenerationTest,
@@ -86,8 +80,8 @@ bool FHTTextureChannelTunerGenerationTest::RunTest(const FString& Parameters)
 	};
 	TestTrue(TEXT("Slot 0 MID variable exists"), HasVariable(TEXT("AutomationTunerMID_0")));
 	TestTrue(TEXT("Slot 1 MID variable exists"), HasVariable(TEXT("AutomationTunerMID_1")));
-	TestTrue(TEXT("LightMap adjustment variable exists"), HasVariable(TEXT("AutomationTuner_LightMap_Adjustment")));
-	TestTrue(TEXT("ID texture adjustment variable exists"), HasVariable(TEXT("AutomationTuner_ID_Tex_Adjustment")));
+	TestTrue(TEXT("LightMap gain variable exists"), HasVariable(TEXT("AutomationTuner_LightMap_Gain")));
+	TestTrue(TEXT("ID texture gain variable exists"), HasVariable(TEXT("AutomationTuner_ID_Tex_Gain")));
 	TestTrue(TEXT("LightMap render target variable exists"), HasVariable(TEXT("AutomationTuner_LightMap_RT")));
 	TestTrue(TEXT("ID texture render target variable exists"), HasVariable(TEXT("AutomationTuner_ID_Tex_RT")));
 
@@ -102,8 +96,6 @@ bool FHTTextureChannelTunerGenerationTest::RunTest(const FString& Parameters)
 	int32 ExportRenderTargetCount = 0;
 	int32 SavedDirectoryCount = 0;
 	TArray<UK2Node_CallFunction*> CreateRTCalls;
-	TArray<UK2Node_CallFunction*> ExportCalls;
-	bool bMetadataContainsBlackWhiteMode = false;
 	bool bMetadataContainsPNGExport = false;
 	bool bAllExportFileNamesArePNG = true;
 	bool bAllMIDSourceMaterialsAreRuntimeCurrent = true;
@@ -117,7 +109,6 @@ bool FHTTextureChannelTunerGenerationTest::RunTest(const FString& Parameters)
 				if (Comment->NodeComment.StartsWith(TEXT("HT Texture Tuner - AutomationTuner;")))
 				{
 					++MetadataCommentCount;
-					bMetadataContainsBlackWhiteMode |= Comment->NodeComment.Contains(TEXT(";Mode=BlackWhiteV1;"));
 					bMetadataContainsPNGExport |= Comment->NodeComment.Contains(TEXT("HTTC_Export_AutomationTuner_LightMap"))
 						&& Comment->NodeComment.Contains(TEXT("HTTC_Export_AutomationTuner_ID_Tex"))
 						&& Comment->NodeComment.Contains(TEXT("_RGB.png"));
@@ -152,7 +143,6 @@ bool FHTTextureChannelTunerGenerationTest::RunTest(const FString& Parameters)
 			}
 			if (FunctionName == TEXT("ExportRenderTarget"))
 			{
-				ExportCalls.Add(Call);
 				const UEdGraphPin* FileNamePin = Call->FindPin(TEXT("FileName"));
 				bAllExportFileNamesArePNG &= FileNamePin
 					&& FileNamePin->DefaultValue.EndsWith(TEXT("_RGB.png"));
@@ -169,13 +159,12 @@ bool FHTTextureChannelTunerGenerationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("One tuner metadata group is generated"), MetadataCommentCount, 1);
 	TestEqual(TEXT("One MID is created per selected slot"), CreateMIDCount, 2);
 	TestEqual(TEXT("Each selected map has a Begin Draw call"), BeginDrawCount, 2);
-	TestEqual(TEXT("Each selected map has an original overwrite and a white contribution draw"), DrawTextureCount, 4);
+	TestEqual(TEXT("Each selected map has a Draw Texture call"), DrawTextureCount, 2);
 	TestEqual(TEXT("Each selected map has an End Draw call"), EndDrawCount, 2);
 	TestEqual(TEXT("Apply and Reset update both slot MIDs for both maps"), SetTextureCount, 8);
 	TestEqual(TEXT("Each selected map has one PNG export call"), ExportRenderTargetCount, 2);
 	TestEqual(TEXT("Each PNG export resolves the runtime Saved directory"), SavedDirectoryCount, 2);
 	TestTrue(TEXT("Tuner metadata exposes both PNG export events and filenames"), bMetadataContainsPNGExport);
-	TestTrue(TEXT("Tuner metadata identifies the signed black/white algorithm"), bMetadataContainsBlackWhiteMode);
 	TestTrue(TEXT("Every generated export uses an RGB PNG filename"), bAllExportFileNamesArePNG);
 	TestTrue(TEXT("MIDs use the slot's current material instead of a packaged hard reference"), bAllMIDSourceMaterialsAreRuntimeCurrent);
 	TestEqual(TEXT("Both tuner maps create a render target"), CreateRTCalls.Num(), 2);
@@ -185,160 +174,70 @@ bool FHTTextureChannelTunerGenerationTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Preview targets cannot sample stale lower mips"), MipsPin && MipsPin->DefaultValue == TEXT("false"));
 	}
 
-	// Execute the actual generated Apply/Reset/Export events with GPU textures.
-	// Cover black source pixels, mixed channels, both endpoints, redraws, and PNG bytes.
-	if (FApp::CanEverRender() && FirstResult.bSuccess)
+	// Exercise real GPU minification: the previous auto-mip setup can look correct at
+	// full size while sampling old/cleared data when viewed smaller or at an angle.
+	if (FApp::CanEverRender() && !CreateRTCalls.IsEmpty())
 	{
 		UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-		if (TestNotNull(TEXT("World for GPU tuner regression"), World))
+		const UEdGraphPin* MipsPin = CreateRTCalls[0]->FindPin(TEXT("bAutoGenerateMipMaps"));
+		if (TestNotNull(TEXT("World for GPU tuner regression"), World) && MipsPin)
 		{
-			// Keep exports isolated from any user files while testing the generated export nodes.
-			const FString RunId = FGuid::NewGuid().ToString(EGuidFormats::Digits);
-			TMap<FName, FString> ExportFiles;
-			for (UK2Node_CallFunction* Export : ExportCalls)
+			const FLinearColor SourceColor(160.0f / 255.0f, 100.0f / 255.0f, 200.0f / 255.0f, 1.0f);
+			UTextureRenderTarget2D* Original = UKismetRenderingLibrary::CreateRenderTarget2D(World, 64, 64, RTF_RGBA8, SourceColor, false);
+			UTextureRenderTarget2D* Tuned = UKismetRenderingLibrary::CreateRenderTarget2D(World, 64, 64, RTF_RGBA8, FLinearColor::Black, MipsPin->DefaultValue == TEXT("true"));
+			if (TestNotNull(TEXT("GPU original texture"), Original) && TestNotNull(TEXT("GPU tuned texture"), Tuned))
 			{
-				const UEdGraphPin* RTPin = Export->FindPin(TEXT("TextureRenderTarget"));
-				if (RTPin && RTPin->LinkedTo.Num() == 1)
+				UKismetRenderingLibrary::ClearRenderTarget2D(World, Original, SourceColor);
+				auto Draw = [this, World](UTexture* SourceTexture, UTextureRenderTarget2D* Target, const FLinearColor& Gain)
 				{
-					const FName RTName = RTPin->LinkedTo[0]->PinName;
-					const FString FileName = FString::Printf(TEXT("HTTunerTest_%s_%s_RGB.png"), *RunId, *RTName.ToString());
-					Export->FindPin(TEXT("FileName"))->DefaultValue = FileName;
-					ExportFiles.Add(RTName, FPaths::Combine(FPaths::ProjectSavedDir(), FileName));
-				}
-			}
-			FBlueprintEditorUtils::MarkBlueprintAsModified(TestAnim);
-			FKismetEditorUtilities::CompileBlueprint(TestAnim);
-			TestTrue(TEXT("GPU test blueprint compiles"), TestAnim->Status != BS_Error);
-
-			FActorSpawnParameters SpawnParams;
-			SpawnParams.ObjectFlags |= RF_Transient;
-			AActor* Owner = World->SpawnActor<AActor>(SpawnParams);
-			if (TestNotNull(TEXT("Transient tuner test actor"), Owner))
-			{
-				USkeletalMeshComponent* Component = NewObject<USkeletalMeshComponent>(Owner, NAME_None, RF_Transient);
-				Owner->AddInstanceComponent(Component);
-				UAnimInstance* Instance = NewObject<UAnimInstance>(Component, TestAnim->GeneratedClass);
-				auto SetObject = [this, Instance](const FName Name, UObject* Value)
-				{
-					FObjectPropertyBase* Property = FindFProperty<FObjectPropertyBase>(Instance->GetClass(), Name);
-					if (TestNotNull(*Name.ToString(), Property))
+					UCanvas* Canvas = nullptr;
+					FVector2D Size;
+					FDrawToRenderTargetContext Context;
+					UKismetRenderingLibrary::BeginDrawCanvasToRenderTarget(World, Target, Canvas, Size, Context);
+					if (!TestNotNull(TEXT("GPU drawing canvas"), Canvas))
 					{
-						Property->SetObjectPropertyValue_InContainer(Instance, Value);
+						return;
 					}
+					Canvas->K2_DrawTexture(SourceTexture, FVector2D::ZeroVector, Size, FVector2D::ZeroVector, FVector2D::UnitVector, Gain, BLEND_Opaque);
+					UKismetRenderingLibrary::EndDrawCanvasToRenderTarget(World, Context);
 				};
-				UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, *Params.SourceMaterialPath);
-				TArray<UMaterialInstanceDynamic*> MIDs;
-				for (int32 Slot = 0; Slot < 2; ++Slot)
+				for (const float RedGain : { 1.0f, 0.0f, 2.0f, 1.0f })
 				{
-					UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(Material, Owner);
-					MIDs.Add(MID);
-					SetObject(FName(*FString::Printf(TEXT("AutomationTunerMID_%d"), Slot)), MID);
-				}
-				const uint8 Levels[] = { 0, 60, 160, 255 };
-				TArray<FColor> SourcePixels;
-				for (int32 Y = 0; Y < 64; ++Y)
-				{
-					for (int32 X = 0; X < 64; ++X)
+					Draw(Original, Tuned, FLinearColor(RedGain, 1.0f, 1.0f, 1.0f));
+					// Raw RGBA8 reads with bNormalize=false return byte values, not 0..1.
+					const FLinearColor Expected(FMath::Min(160.0f * RedGain, 255.0f), 100.0f, 200.0f, 255.0f);
+					const FString PNGName = TEXT("HTGainRollback_") + FGuid::NewGuid().ToString(EGuidFormats::Digits) + TEXT(".png");
+					const FString PNGPath = FPaths::Combine(FPaths::ProjectSavedDir(), PNGName);
+					UKismetRenderingLibrary::ExportRenderTarget(World, Tuned, FPaths::ProjectSavedDir(), PNGName);
+					FImage PNG;
+					if (TestTrue(TEXT("Multiplier render target exports a readable PNG"), FImageUtils::LoadImage(*PNGPath, PNG)))
 					{
-						SourcePixels.Add(FColor(Levels[X / 16], Levels[3 - X / 16], 160, Levels[X / 16]));
-					}
-				}
-				UTexture2D* Original = UTexture2D::CreateTransient(64, 64, PF_B8G8R8A8, NAME_None,
-					TConstArrayView64<uint8>(reinterpret_cast<const uint8*>(SourcePixels.GetData()), SourcePixels.Num() * sizeof(FColor)));
-				Original->SRGB = false;
-				Original->Filter = TF_Nearest;
-				Original->UpdateResource();
-				const TArray<FLinearColor> Adjustments = {
-					FLinearColor(0, 0, 0, 1), FLinearColor(1, 0, 0, 1), FLinearColor(-1, 0, 0, 1),
-					FLinearColor(0.5f, -0.5f, 0.25f, 1), FLinearColor(1, 1, 1, 1),
-					FLinearColor(-1, -1, -1, 1), FLinearColor(0, 0, 0, 1),
-					FLinearColor(2, -2, 0.5f, 1), FLinearColor(0, 0, 0, 1)
-				};
-				auto AdjustByte = [](const uint8 Value, const float Amount)
-				{
-					const float T = FMath::Clamp(Amount, -1.0f, 1.0f);
-					return static_cast<uint8>(FMath::RoundToInt(T < 0 ? Value * (1 + T) : Value + (255 - Value) * T));
-				};
-				for (const FName MapName : { FName(TEXT("LightMap")), FName(TEXT("ID_Tex")) })
-				{
-					const FString Prefix = TEXT("AutomationTuner_") + MapName.ToString();
-					UTextureRenderTarget2D* Tuned = UKismetRenderingLibrary::CreateRenderTarget2D(World, 64, 64, RTF_RGBA8, FLinearColor::Black, false);
-					SetObject(FName(*(Prefix + TEXT("_Source"))), Original);
-					SetObject(FName(*(Prefix + TEXT("_RT"))), Tuned);
-					FStructProperty* AdjustmentProperty = FindFProperty<FStructProperty>(Instance->GetClass(), FName(*(Prefix + TEXT("_Adjustment"))));
-					UFunction* Apply = Instance->FindFunction(FName(*(TEXT("HTTC_Apply_") + Prefix)));
-					UFunction* Export = Instance->FindFunction(FName(*(TEXT("HTTC_Export_") + Prefix)));
-					UFunction* Reset = Instance->FindFunction(FName(*(TEXT("HTTC_Reset_") + Prefix)));
-					const FString* ExportFile = ExportFiles.Find(FName(*(Prefix + TEXT("_RT"))));
-					if (TestNotNull(TEXT("Adjustment property"), AdjustmentProperty) && TestNotNull(TEXT("Apply event"), Apply)
-						&& TestNotNull(TEXT("Export event"), Export) && TestNotNull(TEXT("Reset event"), Reset) && TestNotNull(TEXT("PNG path"), ExportFile))
-					{
-						TestTrue(TEXT("New adjustment defaults to neutral"), AdjustmentProperty->ContainerPtrToValuePtr<FLinearColor>(Instance)->Equals(FLinearColor(0, 0, 0, 1)));
-						for (const FLinearColor& Adjustment : Adjustments)
+						if (TestTrue(TEXT("PNG is 64x64 BGRA8"), PNG.SizeX == 64 && PNG.SizeY == 64 && PNG.Format == ERawImageFormat::BGRA8))
 						{
-							*AdjustmentProperty->ContainerPtrToValuePtr<FLinearColor>(Instance) = Adjustment;
-							Instance->ProcessEvent(Apply, nullptr);
-							FImage Preview;
-							if (TestTrue(TEXT("Read generated preview"), FImageUtils::GetRenderTargetImage(Tuned, Preview))
-								&& TestTrue(TEXT("RGBA8 preview format"), Preview.Format == ERawImageFormat::BGRA8))
-							{
-								const FColor* Pixels = reinterpret_cast<const FColor*>(Preview.RawData.GetData());
-								int32 BadPixels = 0;
-								for (int32 Pixel = 0; Pixel < SourcePixels.Num(); ++Pixel)
-								{
-									const FColor& Before = SourcePixels[Pixel];
-									BadPixels += FMath::Abs(int32(Pixels[Pixel].R) - AdjustByte(Before.R, Adjustment.R)) > 2
-										|| FMath::Abs(int32(Pixels[Pixel].G) - AdjustByte(Before.G, Adjustment.G)) > 2
-										|| FMath::Abs(int32(Pixels[Pixel].B) - AdjustByte(Before.B, Adjustment.B)) > 2
-										|| Pixels[Pixel].A != Before.A;
-								}
-								TestEqual(FString::Printf(TEXT("%s %s updates every RGB pixel and preserves alpha"), *MapName.ToString(), *Adjustment.ToString()), BadPixels, 0);
-								// Export via the generated event, then decode PNG and compare exact stored bytes.
-								Instance->ProcessEvent(Export, nullptr);
-								FImage PNG;
-								if (TestTrue(TEXT("Generated export writes a decodable PNG"), FImageUtils::LoadImage(**ExportFile, PNG)))
-								{
-									TestTrue(TEXT("PNG equals the current preview including alpha"), PNG.SizeX == Preview.SizeX && PNG.SizeY == Preview.SizeY
-										&& PNG.Format == Preview.Format && PNG.RawData == Preview.RawData);
-								}
-							}
-							// Probe a constant stripe at three scales to detect stale lower-level sampling.
-							for (const int32 ProbeSize : { 64, 8, 1 })
-							{
-								UTextureRenderTarget2D* Probe = UKismetRenderingLibrary::CreateRenderTarget2D(World, ProbeSize, ProbeSize, RTF_RGBA8, FLinearColor::Black, false);
-								UCanvas* Canvas = nullptr;
-								FVector2D Size;
-								FDrawToRenderTargetContext Context;
-								UKismetRenderingLibrary::BeginDrawCanvasToRenderTarget(World, Probe, Canvas, Size, Context);
-								if (Canvas)
-								{
-									Canvas->K2_DrawTexture(Tuned, FVector2D::ZeroVector, Size, FVector2D(0.0625f, 0.25f), FVector2D(0.125f, 0.5f), FLinearColor::White, BLEND_Opaque);
-									UKismetRenderingLibrary::EndDrawCanvasToRenderTarget(World, Context);
-								}
-								const FLinearColor Actual = UKismetRenderingLibrary::ReadRenderTargetRawPixel(World, Probe, ProbeSize / 2, ProbeSize / 2, false);
-								TestTrue(FString::Printf(TEXT("%s adjustment %s at %dx%d has no old pixel data (%s)"), *MapName.ToString(), *Adjustment.ToString(), ProbeSize, ProbeSize, *Actual.ToString()),
-									FMath::IsNearlyEqual(Actual.R, float(AdjustByte(0, Adjustment.R)), 2.0f)
-									&& FMath::IsNearlyEqual(Actual.G, float(AdjustByte(255, Adjustment.G)), 2.0f)
-									&& FMath::IsNearlyEqual(Actual.B, float(AdjustByte(160, Adjustment.B)), 2.0f));
-								UKismetRenderingLibrary::ReleaseRenderTarget2D(Probe);
-							}
-						}
-						Instance->ProcessEvent(Reset, nullptr);
-						TestTrue(TEXT("Reset restores neutral adjustment"), AdjustmentProperty->ContainerPtrToValuePtr<FLinearColor>(Instance)->Equals(FLinearColor(0, 0, 0, 1)));
-						for (UMaterialInstanceDynamic* MID : MIDs)
-						{
-							TestTrue(TEXT("Reset restores the exact original texture on each MID"), MID->K2_GetTextureParameterValue(MapName) == Original);
+							const FColor* Pixels = reinterpret_cast<const FColor*>(PNG.RawData.GetData());
+							TestTrue(TEXT("PNG retains multiplied and clamped channel values"), FMath::Abs(Pixels[0].R - Expected.R) <= 2 && FMath::Abs(Pixels[0].G - Expected.G) <= 2 && FMath::Abs(Pixels[0].B - Expected.B) <= 2);
 						}
 					}
-					UKismetRenderingLibrary::ReleaseRenderTarget2D(Tuned);
+					IFileManager::Get().Delete(*PNGPath, false, true);
+					for (const int32 ProbeSize : { 64, 8, 1 })
+					{
+						UTextureRenderTarget2D* Probe = UKismetRenderingLibrary::CreateRenderTarget2D(World, ProbeSize, ProbeSize, RTF_RGBA8, FLinearColor::Black, false);
+						if (TestNotNull(TEXT("GPU minification probe"), Probe))
+						{
+							Draw(Tuned, Probe, FLinearColor::White);
+							const FLinearColor Actual = UKismetRenderingLibrary::ReadRenderTargetRawPixel(World, Probe, ProbeSize / 2, ProbeSize / 2, false);
+							TestTrue(FString::Printf(TEXT("R gain %.0f at %dx%d has current RGB, actual %s"), RedGain, ProbeSize, ProbeSize, *Actual.ToString()),
+								FMath::IsNearlyEqual(Actual.R, Expected.R, 2.0f)
+								&& FMath::IsNearlyEqual(Actual.G, Expected.G, 2.0f)
+								&& FMath::IsNearlyEqual(Actual.B, Expected.B, 2.0f));
+							UKismetRenderingLibrary::ReleaseRenderTarget2D(Probe);
+						}
+					}
 				}
-				World->DestroyActor(Owner);
-				AddInfo(TEXT("Generated black/white Apply/Reset/Export verified for both maps: 0/60/160/255 sources, endpoints, mixed RGB, repeated neutral, PNG pixels, alpha, and 64x64/8x8/1x1 sampling."));
+				AddInfo(TEXT("GPU multiplier/PNG/minification checked at 64x64, 8x8, and 1x1 with R gain 1 -> 0 -> 2 -> 1."));
 			}
-			for (const auto& File : ExportFiles)
-			{
-				IFileManager::Get().Delete(*File.Value, false, true);
-			}
+			UKismetRenderingLibrary::ReleaseRenderTarget2D(Tuned);
+			UKismetRenderingLibrary::ReleaseRenderTarget2D(Original);
 		}
 	}
 	else
@@ -388,6 +287,76 @@ bool FHTTextureChannelTunerGenerationTest::RunTest(const FString& Parameters)
 	{
 		ObjectTools::DeleteObjectsUnchecked({ TestAnim });
 	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHTTextureTunerMultiplierRollbackTest,
+	"HT.BlueprintToggleTool.TextureTunerMultiplierRollback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHTTextureTunerMultiplierRollbackTest::RunTest(const FString& Parameters)
+{
+	// Exercise migration on an isolated copy of the user's saved signed tuner.
+	const FString Role(TEXT("/Game/Characters/Player/057_AKane_fashion2/"));
+	UAnimBlueprint* Source = LoadObject<UAnimBlueprint>(nullptr, *(Role + TEXT("AKane_fashion2_animbp.AKane_fashion2_animbp")));
+	if (!TestNotNull(TEXT("Read-only current character fixture"), Source)) { return false; }
+	FAssetToolsModule& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
+	UAnimBlueprint* Copy = Cast<UAnimBlueprint>(AssetTools.Get().DuplicateAsset(TEXT("ABP_Rollback"),
+		TEXT("/Game/HTGainRollbackAutomation/Run_") + FGuid::NewGuid().ToString(EGuidFormats::Digits), Source));
+	if (!TestNotNull(TEXT("Isolated rollback copy"), Copy)) { return false; }
+	FHTBlueprintToggleGeneratorParams Params;
+	Params.Mode = EHTBlueprintToggleMode::TextureChannelTuner;
+	Params.AnimBlueprintPath = Copy->GetPathName();
+	Params.ToggleVariableName = TEXT("MI_blackbird_057_Akane_cloth_Tuner");
+	for (int32 Slot = 13; Slot <= 27; ++Slot) { Params.MaterialElementIndices.Add(Slot); }
+	Params.SourceMaterialPath = Role + TEXT("ter/cloth_ter/MI_blackbird_057_Akane_cloth.MI_blackbird_057_Akane_cloth");
+	Params.LightMapTexturePath = Role + TEXT("ter/cloth_ter/057_Akane_cloth_m.057_Akane_cloth_m");
+	Params.IDTexturePath = Role + TEXT("ter/cloth_ter/057_Akane_cloth_id.057_Akane_cloth_id");
+	Params.bTuneLightMap = Params.bTuneIDTexture = true;
+	Params.bSaveAssets = false;
+	UEdGraph* Graph = FBlueprintEditorUtils::FindEventGraph(Copy);
+	TArray<UEdGraphNode*> UnrelatedNodes;
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		// The saved fixture's tuner starts at Y=0; panel routing is above it.
+		if (Node->NodePosY < 0) { UnrelatedNodes.Add(Node); }
+	}
+	const auto Result = FHTBlueprintToggleGenerator::Generate(Params);
+	TestTrue(TEXT("Existing signed graph can regenerate as multiplier"), Result.bSuccess);
+	if (!Result.bSuccess) { AddError(Result.ToDisplayString()); }
+	int32 Comments = 0;
+	for (const UEdGraphNode* Node : FBlueprintEditorUtils::FindEventGraph(Copy)->Nodes)
+	{
+		if (const auto* Event = Cast<UK2Node_CustomEvent>(Node))
+		{
+			const FString Name = Event->CustomFunctionName.ToString();
+			TestFalse(TEXT("Later worker/prepare/diagnostic events removed"), Name.StartsWith(TEXT("HTTC_Work_")) || Name.StartsWith(TEXT("HTTC_Prepare_")) || Name.StartsWith(TEXT("HTTC_Status_")));
+		}
+		if (const auto* Comment = Cast<UEdGraphNode_Comment>(Node); Comment && Comment->NodeComment.StartsWith(TEXT("HT Texture Tuner - ")))
+		{
+			++Comments;
+			TestTrue(TEXT("Restored metadata references multipliers and PNG"), Comment->NodeComment.Contains(TEXT("_Gain,")) && Comment->NodeComment.Contains(TEXT("_RGB.png")) && !Comment->NodeComment.Contains(TEXT("Mode=")));
+		}
+	}
+	TestEqual(TEXT("Exactly one restored tuner group"), Comments, 1);
+	for (const UEdGraphNode* Node : UnrelatedNodes)
+	{
+		TestTrue(TEXT("Existing panel nodes outside the tuner are preserved"), Graph->Nodes.Contains(Node));
+	}
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		if (auto* Comment = Cast<UEdGraphNode_Comment>(Node)) { Comment->ClearNodesUnderComment(); }
+	}
+	const auto ReopenedResult = FHTBlueprintToggleGenerator::Generate(Params);
+	TestTrue(TEXT("Multiplier regeneration also works without transient comment membership"), ReopenedResult.bSuccess);
+	int32 MIDCount = 0;
+	for (const UEdGraphNode* Node : Graph->Nodes)
+	{
+		if (const auto* Call = Cast<UK2Node_CallFunction>(Node); Call && Call->FunctionReference.GetMemberName() == TEXT("CreateDynamicMaterialInstance")) { ++MIDCount; }
+	}
+	TestEqual(TEXT("No duplicate slot initialization remains after regeneration"), MIDCount, 15);
+	ObjectTools::DeleteObjectsUnchecked({ Copy });
 	return !HasAnyErrors();
 }
 

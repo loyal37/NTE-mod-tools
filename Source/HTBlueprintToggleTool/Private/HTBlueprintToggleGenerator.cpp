@@ -854,7 +854,24 @@ namespace HTToggleGenerator
 		}
 		for (UEdGraphNode_Comment* Comment : Comments)
 		{
-			for (UEdGraphNode* Node : GetNodesUnderComment(Comment))
+			TArray<UEdGraphNode*> Members = GetNodesUnderComment(Comment);
+			// Comment membership is editor-only and is not serialized. Recover the
+			// generated group from its saved bounds when reopening an AnimBP.
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				if (!Node || Node->IsA<UEdGraphNode_Comment>()
+					|| (Node->IsA<UK2Node_Event>() && !Node->IsA<UK2Node_CustomEvent>())
+					|| Node->IsA<UK2Node_ExecutionSequence>())
+				{
+					continue; // Shared animation entry/dispatch nodes are not tuner-owned.
+				}
+				if (Node->NodePosX >= Comment->NodePosX && Node->NodePosX <= Comment->NodePosX + Comment->NodeWidth
+					&& Node->NodePosY >= Comment->NodePosY && Node->NodePosY <= Comment->NodePosY + Comment->NodeHeight)
+				{
+					Members.AddUnique(Node);
+				}
+			}
+			for (UEdGraphNode* Node : Members)
 			{
 				Node->BreakAllNodeLinks();
 				Graph->RemoveNode(Node);
@@ -1934,60 +1951,12 @@ namespace HTToggleGenerator
 		UTexture2D* PreviewTexture = nullptr;
 		FName SourceVariable;
 		FName RenderTargetVariable;
-		FName AdjustmentVariable;
+		FName GainVariable;
 		FName ApplyEvent;
 		FName ResetEvent;
 		FName ExportEvent;
 		FString ExportFileName;
 	};
-
-	static bool BuildTextureTunerBlendColors(
-		UEdGraph* Graph,
-		UEdGraphPin* Adjustment,
-		const FVector2D Base,
-		UEdGraphPin*& OutScale,
-		UEdGraphPin*& OutBias,
-		FHTBlueprintToggleGeneratorResult& Result)
-	{
-		UK2Node_CallFunction* Break = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("BreakColor"), Base, Result);
-		UK2Node_CallFunction* Scale = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("MakeColor"), Base + FVector2D(1100, 0), Result);
-		UK2Node_CallFunction* Bias = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("MakeColor"), Base + FVector2D(1100, 360), Result);
-		if (!Break || !Scale || !Bias)
-		{
-			return false;
-		}
-		Connect(Adjustment, FindAnyPin(Break, TEXT("InColor")), Result, TEXT("Adjustment -> RGB components"));
-		SetDefaultValue(FindAnyPin(Scale, TEXT("A")), TEXT("1.0"));
-		SetDefaultValue(FindAnyPin(Bias, TEXT("A")), TEXT("1.0"));
-		static const FName Channels[] = { TEXT("R"), TEXT("G"), TEXT("B") };
-		for (int32 Channel = 0; Channel < 3; ++Channel)
-		{
-			const FVector2D Position = Base + FVector2D(240, Channel * 220);
-			UK2Node_CallFunction* Clamp = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("FClamp"), Position, Result);
-			UK2Node_CallFunction* Abs = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("Abs"), Position + FVector2D(250, 0), Result);
-			UK2Node_CallFunction* OneMinus = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("Subtract_DoubleDouble"), Position + FVector2D(500, 0), Result);
-			UK2Node_CallFunction* Positive = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("FMax"), Position + FVector2D(500, 100), Result);
-			if (!Clamp || !Abs || !OneMinus || !Positive)
-			{
-				return false;
-			}
-			// Signed adjustment t: source * (1 - abs(t)) + max(t, 0).
-			// t=-1 -> 0, t=0 -> original, t=1 -> 1, including originally black pixels.
-			SetDefaultValue(FindAnyPin(Clamp, TEXT("Min")), TEXT("-1.0"));
-			SetDefaultValue(FindAnyPin(Clamp, TEXT("Max")), TEXT("1.0"));
-			SetDefaultValue(FindAnyPin(OneMinus, TEXT("A")), TEXT("1.0"));
-			SetDefaultValue(FindAnyPin(Positive, TEXT("B")), TEXT("0.0"));
-			Connect(FindAnyPin(Break, Channels[Channel]), FindAnyPin(Clamp, TEXT("Value")), Result, TEXT("Channel -> clamp adjustment"));
-			Connect(FindAnyPin(Clamp, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(Abs, TEXT("A")), Result, TEXT("Clamped adjustment -> absolute value"));
-			Connect(FindAnyPin(Abs, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(OneMinus, TEXT("B")), Result, TEXT("Absolute adjustment -> source weight"));
-			Connect(FindAnyPin(Clamp, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(Positive, TEXT("A")), Result, TEXT("Clamped adjustment -> white weight"));
-			Connect(FindAnyPin(OneMinus, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(Scale, Channels[Channel]), Result, TEXT("Source weight -> draw tint"));
-			Connect(FindAnyPin(Positive, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(Bias, Channels[Channel]), Result, TEXT("White weight -> additive tint"));
-		}
-		OutScale = FindAnyPin(Scale, UEdGraphSchema_K2::PN_ReturnValue);
-		OutBias = FindAnyPin(Bias, UEdGraphSchema_K2::PN_ReturnValue);
-		return Result.Errors.IsEmpty();
-	}
 
 	static void GenerateTextureTunerApplyGraph(
 		UEdGraph* Graph,
@@ -1997,54 +1966,41 @@ namespace HTToggleGenerator
 		TArray<UEdGraphNode*>& OutNodes,
 		FHTBlueprintToggleGeneratorResult& Result)
 	{
-		const int32 FirstNodeIndex = Graph->Nodes.Num();
 		UK2Node_CustomEvent* Event = SpawnCustomEvent(Graph, Map.ApplyEvent, Base);
 		UK2Node_VariableGet* GetRT = SpawnVariableGet(Graph, Map.RenderTargetVariable, nullptr, Base + FVector2D(260, 220));
 		UK2Node_VariableGet* GetSource = SpawnVariableGet(Graph, Map.SourceVariable, nullptr, Base + FVector2D(520, 360));
-		UK2Node_VariableGet* GetAdjustment = SpawnVariableGet(Graph, Map.AdjustmentVariable, nullptr, Base + FVector2D(520, 500));
+		UK2Node_VariableGet* GetGain = SpawnVariableGet(Graph, Map.GainVariable, nullptr, Base + FVector2D(520, 500));
 		UK2Node_CallFunction* BeginDraw = SpawnCall(Graph, UKismetRenderingLibrary::StaticClass(), TEXT("BeginDrawCanvasToRenderTarget"), Base + FVector2D(260, 0), Result);
 		UK2Node_CallFunction* DrawTexture = SpawnCall(Graph, UCanvas::StaticClass(), TEXT("K2_DrawTexture"), Base + FVector2D(760, 0), Result);
-		UK2Node_CallFunction* DrawWhite = SpawnCall(Graph, UCanvas::StaticClass(), TEXT("K2_DrawTexture"), Base + FVector2D(1120, 0), Result);
-		UK2Node_CallFunction* EndDraw = SpawnCall(Graph, UKismetRenderingLibrary::StaticClass(), TEXT("EndDrawCanvasToRenderTarget"), Base + FVector2D(1480, 0), Result);
-		if (!Event || !GetRT || !GetSource || !GetAdjustment || !BeginDraw || !DrawTexture || !DrawWhite || !EndDraw)
+		UK2Node_CallFunction* EndDraw = SpawnCall(Graph, UKismetRenderingLibrary::StaticClass(), TEXT("EndDrawCanvasToRenderTarget"), Base + FVector2D(1120, 0), Result);
+		if (!Event || !GetRT || !GetSource || !GetGain || !BeginDraw || !DrawTexture || !EndDraw)
 		{
 			return;
 		}
 
-		UEdGraphPin* Scale = nullptr;
-		UEdGraphPin* Bias = nullptr;
-		if (!BuildTextureTunerBlendColors(Graph, FindAnyPin(GetAdjustment, Map.AdjustmentVariable), Base + FVector2D(800, 360), Scale, Bias, Result))
-		{
-			return;
-		}
-		for (UK2Node_CallFunction* Draw : { DrawTexture, DrawWhite })
-		{
-			SetDefaultValue(FindAnyPin(Draw, TEXT("ScreenPosition")), TEXT("(X=0.000000,Y=0.000000)"));
-			SetDefaultValue(FindAnyPin(Draw, TEXT("CoordinatePosition")), TEXT("(X=0.000000,Y=0.000000)"));
-			SetDefaultValue(FindAnyPin(Draw, TEXT("CoordinateSize")), TEXT("(X=1.000000,Y=1.000000)"));
-			SetDefaultValue(FindAnyPin(Draw, TEXT("Rotation")), TEXT("0.0"));
-			Connect(FindAnyPin(BeginDraw, TEXT("Size")), FindAnyPin(Draw, TEXT("ScreenSize")), Result, TEXT("Full render target size -> Draw Texture"));
-			Connect(FindAnyPin(BeginDraw, TEXT("Canvas")), FindSelfPin(Draw), Result, TEXT("Canvas -> Draw Texture"));
-		}
+		const FVector2D TextureSize(
+			Map.PreviewTexture ? Map.PreviewTexture->GetSizeX() : 1,
+			Map.PreviewTexture ? Map.PreviewTexture->GetSizeY() : 1);
+		SetDefaultValue(FindAnyPin(DrawTexture, TEXT("ScreenPosition")), TEXT("(X=0.000000,Y=0.000000)"));
+		SetDefaultValue(FindAnyPin(DrawTexture, TEXT("ScreenSize")), FString::Printf(TEXT("(X=%.6f,Y=%.6f)"), TextureSize.X, TextureSize.Y));
+		SetDefaultValue(FindAnyPin(DrawTexture, TEXT("CoordinatePosition")), TEXT("(X=0.000000,Y=0.000000)"));
+		SetDefaultValue(FindAnyPin(DrawTexture, TEXT("CoordinateSize")), TEXT("(X=1.000000,Y=1.000000)"));
 		SetDefaultValue(FindAnyPin(DrawTexture, TEXT("BlendMode")), TEXT("BLEND_Opaque"));
-		// A null Canvas texture uses the engine's white texture. No new material/asset is needed.
-		// Additive Canvas blending only writes RGB, preserving the source alpha from the first pass.
-		SetDefaultValue(FindAnyPin(DrawWhite, TEXT("BlendMode")), TEXT("BLEND_Additive"));
+		SetDefaultValue(FindAnyPin(DrawTexture, TEXT("Rotation")), TEXT("0.0"));
 
 		Connect(GetSchema()->FindExecutionPin(*Event, EGPD_Output), GetSchema()->FindExecutionPin(*BeginDraw, EGPD_Input), Result, TEXT("Texture tuner Apply -> Begin Draw"));
 		Connect(FindAnyPin(GetRT, Map.RenderTargetVariable), FindAnyPin(BeginDraw, TEXT("TextureRenderTarget")), Result, TEXT("Texture tuner RT -> Begin Draw"));
 		Connect(GetSchema()->FindExecutionPin(*BeginDraw, EGPD_Output), GetSchema()->FindExecutionPin(*DrawTexture, EGPD_Input), Result, TEXT("Begin Draw -> Draw Texture"));
+		Connect(FindAnyPin(BeginDraw, TEXT("Canvas")), FindSelfPin(DrawTexture), Result, TEXT("Canvas -> Draw Texture"));
 		Connect(FindAnyPin(GetSource, Map.SourceVariable), FindAnyPin(DrawTexture, TEXT("RenderTexture")), Result, TEXT("Original texture -> Draw Texture"));
-		Connect(Scale, FindAnyPin(DrawTexture, TEXT("RenderColor")), Result, TEXT("Original contribution -> opaque draw"));
-		Connect(Bias, FindAnyPin(DrawWhite, TEXT("RenderColor")), Result, TEXT("White contribution -> additive draw"));
-		Connect(GetSchema()->FindExecutionPin(*DrawTexture, EGPD_Output), GetSchema()->FindExecutionPin(*DrawWhite, EGPD_Input), Result, TEXT("Overwrite previous preview -> add white contribution"));
-		Connect(GetSchema()->FindExecutionPin(*DrawWhite, EGPD_Output), GetSchema()->FindExecutionPin(*EndDraw, EGPD_Input), Result, TEXT("Add white -> End Draw"));
+		Connect(FindAnyPin(GetGain, Map.GainVariable), FindAnyPin(DrawTexture, TEXT("RenderColor")), Result, TEXT("RGB gain -> Draw Texture tint"));
+		Connect(GetSchema()->FindExecutionPin(*DrawTexture, EGPD_Output), GetSchema()->FindExecutionPin(*EndDraw, EGPD_Input), Result, TEXT("Draw Texture -> End Draw"));
 		Connect(FindAnyPin(BeginDraw, TEXT("Context")), FindAnyPin(EndDraw, TEXT("Context")), Result, TEXT("Draw context -> End Draw"));
 
 		UEdGraphPin* Exec = GetSchema()->FindExecutionPin(*EndDraw, EGPD_Output);
 		for (int32 Index = 0; Index < MIDVariables.Num(); ++Index)
 		{
-			const FVector2D NodePosition = Base + FVector2D(1820 + Index * 360, 0);
+			const FVector2D NodePosition = Base + FVector2D(1460 + Index * 360, 0);
 			UK2Node_VariableGet* GetMID = SpawnVariableGet(Graph, MIDVariables[Index], nullptr, NodePosition + FVector2D(0, 220));
 			UK2Node_CallFunction* SetTexture = SpawnCall(Graph, UMaterialInstanceDynamic::StaticClass(), TEXT("SetTextureParameterValue"), NodePosition, Result);
 			if (!GetMID || !SetTexture)
@@ -2060,11 +2016,7 @@ namespace HTToggleGenerator
 			OutNodes.Add(SetTexture);
 		}
 
-		// Include any real-number conversion nodes inserted by the schema in regeneration cleanup.
-		for (int32 Index = FirstNodeIndex; Index < Graph->Nodes.Num(); ++Index)
-		{
-			OutNodes.AddUnique(Graph->Nodes[Index]);
-		}
+		OutNodes.Append({ Event, GetRT, GetSource, GetGain, BeginDraw, DrawTexture, EndDraw });
 	}
 
 	static void GenerateTextureTunerResetGraph(
@@ -2076,16 +2028,16 @@ namespace HTToggleGenerator
 		FHTBlueprintToggleGeneratorResult& Result)
 	{
 		UK2Node_CustomEvent* Event = SpawnCustomEvent(Graph, Map.ResetEvent, Base);
-		UK2Node_VariableSet* SetAdjustment = SpawnVariableSet(Graph, Map.AdjustmentVariable, nullptr, Base + FVector2D(280, 0));
+		UK2Node_VariableSet* SetGain = SpawnVariableSet(Graph, Map.GainVariable, nullptr, Base + FVector2D(280, 0));
 		UK2Node_VariableGet* GetSource = SpawnVariableGet(Graph, Map.SourceVariable, nullptr, Base + FVector2D(560, 260));
-		if (!Event || !SetAdjustment || !GetSource)
+		if (!Event || !SetGain || !GetSource)
 		{
 			return;
 		}
-		SetDefaultValue(FindAnyPin(SetAdjustment, Map.AdjustmentVariable), TEXT("(R=0.000000,G=0.000000,B=0.000000,A=1.000000)"));
-		Connect(GetSchema()->FindExecutionPin(*Event, EGPD_Output), GetSchema()->FindExecutionPin(*SetAdjustment, EGPD_Input), Result, TEXT("Texture tuner Reset -> neutral adjustment"));
+		SetDefaultValue(FindAnyPin(SetGain, Map.GainVariable), TEXT("(R=1.000000,G=1.000000,B=1.000000,A=1.000000)"));
+		Connect(GetSchema()->FindExecutionPin(*Event, EGPD_Output), GetSchema()->FindExecutionPin(*SetGain, EGPD_Input), Result, TEXT("Texture tuner Reset -> white gain"));
 
-		UEdGraphPin* Exec = GetSchema()->FindExecutionPin(*SetAdjustment, EGPD_Output);
+		UEdGraphPin* Exec = GetSchema()->FindExecutionPin(*SetGain, EGPD_Output);
 		for (int32 Index = 0; Index < MIDVariables.Num(); ++Index)
 		{
 			const FVector2D NodePosition = Base + FVector2D(560 + Index * 360, 0);
@@ -2096,14 +2048,14 @@ namespace HTToggleGenerator
 				return;
 			}
 			SetDefaultValue(FindAnyPin(SetTexture, TEXT("ParameterName")), Map.ParameterName.ToString());
-			Connect(Exec, GetSchema()->FindExecutionPin(*SetTexture, EGPD_Input), Result, TEXT("Reset adjustment -> restore texture"));
+			Connect(Exec, GetSchema()->FindExecutionPin(*SetTexture, EGPD_Input), Result, TEXT("Reset gain -> restore texture"));
 			Connect(FindAnyPin(GetMID, MIDVariables[Index]), FindSelfPin(SetTexture), Result, TEXT("MID -> restore texture"));
 			Connect(FindAnyPin(GetSource, Map.SourceVariable), FindAnyPin(SetTexture, TEXT("Value")), Result, TEXT("Original texture -> parameter"));
 			Exec = GetSchema()->FindExecutionPin(*SetTexture, EGPD_Output);
 			OutNodes.Add(GetMID);
 			OutNodes.Add(SetTexture);
 		}
-		OutNodes.Append({ Event, SetAdjustment, GetSource });
+		OutNodes.Append({ Event, SetGain, GetSource });
 	}
 
 	static void GenerateTextureTunerExportGraph(
@@ -2202,7 +2154,7 @@ namespace HTToggleGenerator
 			Map.PreviewTexture = PreviewTexture;
 			Map.SourceVariable = FName(*(Prefix + TEXT("_Source")));
 			Map.RenderTargetVariable = FName(*(Prefix + TEXT("_RT")));
-			Map.AdjustmentVariable = FName(*(Prefix + TEXT("_Adjustment")));
+			Map.GainVariable = FName(*(Prefix + TEXT("_Gain")));
 			Map.ApplyEvent = FName(*(TEXT("HTTC_Apply_") + Prefix));
 			Map.ResetEvent = FName(*(TEXT("HTTC_Reset_") + Prefix));
 			Map.ExportEvent = FName(*(TEXT("HTTC_Export_") + Prefix));
@@ -2235,7 +2187,7 @@ namespace HTToggleGenerator
 		{
 			if (!EnsureObjectVariable(AnimBlueprint, Map.SourceVariable, UTexture::StaticClass(), Result, Map.ParameterName.ToString() + TEXT(" original texture"))
 				|| !EnsureObjectVariable(AnimBlueprint, Map.RenderTargetVariable, UTextureRenderTarget2D::StaticClass(), Result, Map.ParameterName.ToString() + TEXT(" render target"))
-				|| !EnsureStructVariable(AnimBlueprint, Map.AdjustmentVariable, TBaseStructure<FLinearColor>::Get(), TEXT("(R=0.000000,G=0.000000,B=0.000000,A=1.000000)"), Result, Map.ParameterName.ToString() + TEXT(" RGB adjustment (-1 = 0, 0 = original, 1 = 255)")))
+				|| !EnsureStructVariable(AnimBlueprint, Map.GainVariable, TBaseStructure<FLinearColor>::Get(), TEXT("(R=1.000000,G=1.000000,B=1.000000,A=1.000000)"), Result, Map.ParameterName.ToString() + TEXT(" RGB gain")))
 			{
 				return Result;
 			}
@@ -2317,27 +2269,27 @@ namespace HTToggleGenerator
 
 		for (int32 MapIndex = 0; MapIndex < Maps.Num(); ++MapIndex)
 		{
-			const float MapY = BaseY + 900.0f + MapIndex * 2000.0f;
+			const float MapY = BaseY + 900.0f + MapIndex * 1500.0f;
 			GenerateTextureTunerApplyGraph(Graph, Maps[MapIndex], MIDVariables, FVector2D(-1450, MapY), Nodes, Result);
-			GenerateTextureTunerResetGraph(Graph, Maps[MapIndex], MIDVariables, FVector2D(-1450, MapY + 1100), Nodes, Result);
-			GenerateTextureTunerExportGraph(Graph, Maps[MapIndex], FVector2D(-1450, MapY + 1500), Nodes, Result);
+			GenerateTextureTunerResetGraph(Graph, Maps[MapIndex], MIDVariables, FVector2D(-1450, MapY + 600), Nodes, Result);
+			GenerateTextureTunerExportGraph(Graph, Maps[MapIndex], FVector2D(-1450, MapY + 1000), Nodes, Result);
 		}
 
-		FString Metadata = FString::Printf(TEXT("HT Texture Tuner - %s;Display=%s;Mode=BlackWhiteV1"), *TunerName.ToString(), *SourceMaterial->GetName());
+		FString Metadata = FString::Printf(TEXT("HT Texture Tuner - %s;Display=%s"), *TunerName.ToString(), *SourceMaterial->GetName());
 		for (const FTextureTunerMapSpec& Map : Maps)
 		{
 			Metadata += FString::Printf(
 				TEXT(";%s=%s,%s,%s,%s,%s,%s"),
 				*Map.ParameterName.ToString(),
-				*Map.AdjustmentVariable.ToString(),
+				*Map.GainVariable.ToString(),
 				*Map.ApplyEvent.ToString(),
 				*Map.ResetEvent.ToString(),
 				Map.PreviewTexture ? *Map.PreviewTexture->GetName() : TEXT("Unknown"),
 				*Map.ExportEvent.ToString(),
 				*Map.ExportFileName);
 		}
-		const float CommentHeight = 1100.0f + Maps.Num() * 2000.0f;
-		const float CommentWidth = 2960.0f + MaterialSlots.Num() * 360.0f;
+		const float CommentHeight = 1100.0f + Maps.Num() * 1500.0f;
+		const float CommentWidth = 2600.0f + MaterialSlots.Num() * 360.0f;
 		UEdGraphNode_Comment* Comment = SpawnCommentBox(
 			Graph,
 			Metadata,
@@ -2345,6 +2297,13 @@ namespace HTToggleGenerator
 			FVector2D(CommentWidth, CommentHeight),
 			FLinearColor(0.20f, 0.08f, 0.32f, 1.0f));
 		AddNodesToComment(Comment, Nodes);
+		// Large slot groups extend farther than the legacy fixed-size box.
+		// Include every generated node so saved-graph regeneration is complete.
+		for (const UEdGraphNode* Node : Nodes)
+		{
+			Comment->NodeWidth = FMath::Max(Comment->NodeWidth, Node->NodePosX - Comment->NodePosX + 600);
+			Comment->NodeHeight = FMath::Max(Comment->NodeHeight, Node->NodePosY - Comment->NodePosY + 300);
+		}
 
 		FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBlueprint);
 		FKismetEditorUtilities::CompileBlueprint(AnimBlueprint);
@@ -2371,7 +2330,7 @@ namespace HTToggleGenerator
 		if (Result.Errors.IsEmpty())
 		{
 			Result.Messages.Add(FString::Printf(TEXT("Generated Texture Channel Tuner %s for slots: %s"), *TunerName.ToString(), *FString::JoinBy(MaterialSlots, TEXT(","), [](const int32 Slot) { return FString::FromInt(Slot); })));
-			Result.Messages.Add(TEXT("RGB adjustments start at 0 (original). Regenerate the NTE panel: -100% = 0, +100% = 255. PNG export uses the processed texture."));
+			Result.Messages.Add(TEXT("RGB gains start at 1.0. Generate the NTE panel to create the runtime sliders."));
 		}
 		Result.bSuccess = Result.Errors.IsEmpty();
 		return Result;
