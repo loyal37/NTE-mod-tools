@@ -252,6 +252,94 @@ bool FHTToggleGraphInlineEditTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHTToggleGraphLegacyPinNamesTest,
+	"HT.BlueprintToggleTool.ToggleGraphLegacyPinNames",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHTToggleGraphLegacyPinNamesTest::RunTest(const FString& Parameters)
+{
+	using namespace HTToggleGraphNodeWidgetTests;
+	UPackage* Package = CreatePackage(*FString::Printf(TEXT("/Temp/HTToggleGraphLegacyPins_%s"), *FGuid::NewGuid().ToString(EGuidFormats::Digits)));
+	Package->SetFlags(RF_Transient);
+	ON_SCOPE_EXIT
+	{
+		Package->SetDirtyFlag(false);
+	};
+	TStrongObjectPtr<UHTToggleGraph> SourceRef(NewObject<UHTToggleGraph>(Package, TEXT("TG_Legacy"), RF_Public | RF_Transient));
+	UEdGraph* Graph = SourceRef->EnsureGraph();
+	UHTToggleGraphNode_Generate* Generate = FindGenerate(Graph);
+	UHTToggleGraphNode_Switch* Switch = Spawn<UHTToggleGraphNode_Switch>(Graph, 0, 0);
+	UHTToggleGraphNode_Group* Group = Spawn<UHTToggleGraphNode_Group>(Graph, -400, 0);
+	UHTToggleGraphNode_Part* Part = Spawn<UHTToggleGraphNode_Part>(Graph, -800, 0);
+	Part->MaterialIDs = { 3 };
+	Link(Graph, Switch->GetOutputPin(), Generate->GetInputPin());
+	Link(Graph, Group->GetOutputPin(), Switch->GetOptionPin(0));
+	Link(Graph, Part->GetOutputPin(), Group->GetGroupInputPin(0));
+
+	// The pin display names v1.5.30 serialized into its assets.
+	const FText LegacyIn = FText::FromString(TEXT("\u8F93\u5165"));
+	const FText LegacyOut = FText::FromString(TEXT("\u8F93\u51FA"));
+	const FText LegacyObject = FText::FromString(TEXT("\u7269\u4F53"));
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (Pin->Direction == EGPD_Output)
+			{
+				Pin->PinFriendlyName = Node == Part ? LegacyObject : LegacyOut;
+			}
+			else if (Pin->PinName.ToString().StartsWith(TEXT("Option_")))
+			{
+				Pin->PinFriendlyName = FText::FromString(FString::Printf(TEXT("\u9009\u9879 %d"), Switch->GetOptionIndex(Pin) + 1));
+			}
+			else
+			{
+				Pin->PinFriendlyName = LegacyIn;
+			}
+		}
+	}
+
+	// Duplicating serializes the graph and runs PostLoad on every copied node, like opening the asset.
+	TStrongObjectPtr<UHTToggleGraph> LoadedRef(DuplicateObject<UHTToggleGraph>(SourceRef.Get(), Package, TEXT("TG_Legacy_Loaded")));
+	UHTToggleGraph* Loaded = LoadedRef.Get();
+	if (!TestTrue(TEXT("The legacy graph round-trips"), Loaded && Loaded->Graph && Loaded->Graph != Graph))
+	{
+		return false;
+	}
+	UHTToggleGraphNode_Generate* LoadedGenerate = nullptr;
+	UHTToggleGraphNode_Switch* LoadedSwitch = nullptr;
+	UHTToggleGraphNode_Group* LoadedGroup = nullptr;
+	UHTToggleGraphNode_Part* LoadedPart = nullptr;
+	for (UEdGraphNode* Node : Loaded->Graph->Nodes)
+	{
+		LoadedGenerate = LoadedGenerate ? LoadedGenerate : Cast<UHTToggleGraphNode_Generate>(Node);
+		LoadedSwitch = LoadedSwitch ? LoadedSwitch : Cast<UHTToggleGraphNode_Switch>(Node);
+		LoadedGroup = LoadedGroup ? LoadedGroup : Cast<UHTToggleGraphNode_Group>(Node);
+		LoadedPart = LoadedPart ? LoadedPart : Cast<UHTToggleGraphNode_Part>(Node);
+		for (const UEdGraphPin* Pin : Node->Pins)
+		{
+			TestFalse(*FString::Printf(TEXT("Loaded pin %s.%s is English: %s"), *Node->GetName(), *Pin->PinName.ToString(), *Pin->PinFriendlyName.ToString()), ContainsCJK(Pin->PinFriendlyName.ToString()));
+		}
+	}
+	if (!TestTrue(TEXT("All four node types were loaded"), LoadedGenerate && LoadedSwitch && LoadedGroup && LoadedPart))
+	{
+		return false;
+	}
+	TestEqual(TEXT("Generate input reads In 1"), LoadedGenerate->GetInputPin()->PinFriendlyName.ToString(), FString(TEXT("In 1")));
+	TestEqual(TEXT("Part output reads Out"), LoadedPart->GetOutputPin()->PinFriendlyName.ToString(), FString(TEXT("Out")));
+	TestEqual(TEXT("Switch option reads Option 2"), LoadedSwitch->GetOptionPin(1)->PinFriendlyName.ToString(), FString(TEXT("Option 2")));
+	TestEqual(TEXT("Group input reads In 1"), LoadedGroup->GetGroupInputPin(0)->PinFriendlyName.ToString(), FString(TEXT("In 1")));
+	TestTrue(TEXT("Switch keeps its generate link"), IsLinked(LoadedSwitch->GetOutputPin(), LoadedGenerate->GetInputPin()));
+	TestTrue(TEXT("Group keeps its option link"), IsLinked(LoadedGroup->GetOutputPin(), LoadedSwitch->GetOptionPin(0)));
+	TestTrue(TEXT("Part keeps its group link"), IsLinked(LoadedPart->GetOutputPin(), LoadedGroup->GetGroupInputPin(0)));
+	TestEqual(TEXT("A second refresh finds nothing left to change"), LoadedSwitch->RefreshPinDisplayNames(), 0);
+	// The label the graph editor draws comes from GetPinDisplayName, even for a stale stored name.
+	LoadedPart->GetOutputPin()->PinFriendlyName = LegacyObject;
+	TestEqual(TEXT("Drawn pin labels ignore stale stored names"), LoadedPart->GetPinDisplayName(LoadedPart->GetOutputPin()).ToString(), FString(TEXT("Out")));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FHTToggleGraphNodeWidgetsTest,
 	"HT.BlueprintToggleTool.ToggleGraphNodeWidgets",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

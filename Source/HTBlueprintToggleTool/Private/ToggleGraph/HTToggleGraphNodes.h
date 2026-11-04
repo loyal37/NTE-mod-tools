@@ -44,9 +44,17 @@ public:
 	// bRecord = false: silent fix-up while loading or opening the editor; does not dirty the asset.
 	bool NormalizeDynamicInputs(bool bRecord = true);
 
+	// Current English display name of one of this node's pins, derived from the pin name.
+	static FText MakePinDisplayName(const UEdGraphPin* Pin);
+	// Rewrites every pin's display name (graphs saved by v1.5.30 carry Chinese names). Links,
+	// pin names and ids are untouched and the asset is not dirtied. Returns how many changed.
+	int32 RefreshPinDisplayNames();
+
 	//~ UEdGraphNode
 	virtual FText GetNodeTitle(ENodeTitleType::Type TitleType) const override;
 	virtual FText GetTooltipText() const override;
+	// Pin labels always come from the pin name, so stale stored names never show.
+	virtual FText GetPinDisplayName(const UEdGraphPin* Pin) const override { return MakePinDisplayName(Pin); }
 	virtual bool CanUserDeleteNode() const override { return true; }
 	virtual bool CanDuplicateNode() const override { return true; }
 	virtual bool SupportsCommentBubble() const override { return false; }

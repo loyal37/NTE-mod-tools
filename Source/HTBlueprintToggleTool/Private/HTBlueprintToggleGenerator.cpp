@@ -3204,24 +3204,30 @@ namespace HTToggleGenerator
 				Label = Variable.VariableName.ToString();
 			}
 			TArray<FString> OptionLabels;
+			// One character per option: '1' = nothing hangs on it (no part, no child switch).
+			// The panel uses this, not the labels, to decide between ON/OFF and cycle controls.
+			FString EmptyMask;
 			for (int32 Option = 0; Option < Switch.OptionCount; ++Option)
 			{
+				const bool bUsed = UsedOptions.Contains(TPair<int32, int32>(Index, Option));
 				FString OptionLabel = Switch.OptionLabels.IsValidIndex(Option) ? SanitizeNestedMetadataField(Switch.OptionLabels[Option]) : FString();
-				if (OptionLabel.IsEmpty() && UsedOptions.Contains(TPair<int32, int32>(Index, Option)))
+				if (OptionLabel.IsEmpty() && bUsed)
 				{
 					OptionLabel = FString::FromInt(Option + 1);
 				}
 				OptionLabels.Add(OptionLabel);
+				EmptyMask.AppendChar(bUsed ? TEXT('0') : TEXT('1'));
 			}
 			Metadata += FString::Printf(
-				TEXT(";Switch=%s,%s,%d,%s,%d,%s,%s"),
+				TEXT(";Switch=%s,%s,%d,%s,%d,%s,%s,%s"),
 				*Variable.VariableName.ToString(),
 				*MakeNestedCanonicalKey(KeySpec),
 				Switch.OptionCount,
 				*ParentVariable,
 				ParentOption,
 				*Label,
-				*FString::Join(OptionLabels, TEXT("|")));
+				*FString::Join(OptionLabels, TEXT("|")),
+				*EmptyMask);
 		}
 		return Metadata;
 	}

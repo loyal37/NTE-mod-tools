@@ -32,6 +32,7 @@ UEdGraph* UHTToggleGraph::EnsureGraph()
 		if (UHTToggleGraphNode* ToggleNode = Cast<UHTToggleGraphNode>(Node))
 		{
 			ToggleNode->NormalizeDynamicInputs(false);
+			ToggleNode->RefreshPinDisplayNames();
 		}
 	}
 	return Graph;

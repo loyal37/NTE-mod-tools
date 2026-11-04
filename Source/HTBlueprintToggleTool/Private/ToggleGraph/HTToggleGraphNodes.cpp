@@ -170,9 +170,60 @@ void UHTToggleGraphNode::NodeConnectionListChanged()
 	NormalizeDynamicInputs(true);
 }
 
+FText UHTToggleGraphNode::MakePinDisplayName(const UEdGraphPin* Pin)
+{
+	if (!Pin)
+	{
+		return FText::GetEmpty();
+	}
+	if (Pin->Direction == EGPD_Output)
+	{
+		return LOCTEXT("OutPin", "Out");
+	}
+	const FString Name = Pin->PinName.ToString();
+	FString Suffix;
+	if (Name.Split(TEXT("_"), nullptr, &Suffix) && Suffix.IsNumeric())
+	{
+		const int32 Index = FCString::Atoi(*Suffix);
+		if (Name.StartsWith(TEXT("Option_")))
+		{
+			return FText::Format(LOCTEXT("OptionPin", "Option {0}"), FText::AsNumber(Index + 1));
+		}
+		if (Name.StartsWith(TEXT("In_")))
+		{
+			return FText::Format(LOCTEXT("DynamicInput", "In {0}"), FText::AsNumber(Index + 1));
+		}
+	}
+	if (Pin->PinName == InputPinName)
+	{
+		return FText::Format(LOCTEXT("DynamicInput", "In {0}"), FText::AsNumber(1));
+	}
+	return FText::FromName(Pin->PinName);
+}
+
+int32 UHTToggleGraphNode::RefreshPinDisplayNames()
+{
+	int32 Changed = 0;
+	for (UEdGraphPin* Pin : Pins)
+	{
+		if (!Pin)
+		{
+			continue;
+		}
+		const FText DisplayName = MakePinDisplayName(Pin);
+		if (!Pin->PinFriendlyName.EqualTo(DisplayName))
+		{
+			Pin->PinFriendlyName = DisplayName;
+			++Changed;
+		}
+	}
+	return Changed;
+}
+
 void UHTToggleGraphNode::PostLoad()
 {
 	Super::PostLoad();
+	RefreshPinDisplayNames();
 	if (HasDynamicInputs())
 	{
 		// Graphs saved before InputCount existed (v1.5.30) have one input pin.

@@ -661,10 +661,10 @@ bool FHTNestedToggleTreeGenerationTest::RunTest(const FString& Parameters)
 			++SwitchEntries;
 		}
 		TestEqual(*FString::Printf(TEXT("%s: metadata lists every switch node"), Pass), SwitchEntries, 10);
-		TestTrue(*FString::Printf(TEXT("%s: root switch entry has labels and no parent"), Pass), Counts.Metadata.Contains(TEXT(";Switch=Style,Alt Five,3,,-1,Outfit style,A|B|C")));
-		TestTrue(*FString::Printf(TEXT("%s: shared stocking entry under style 2 marks its empty option"), Pass), Counts.Metadata.Contains(TEXT(";Switch=Stocking,Alt Eight,2,Style,2,Stocking,1|")));
-		TestTrue(*FString::Printf(TEXT("%s: stocking entry under style 0 marks option 0 empty"), Pass), Counts.Metadata.Contains(TEXT(";Switch=Stocking,Alt Eight,2,Style,0,Stocking,|2")));
-		TestTrue(*FString::Printf(TEXT("%s: unused switch marks both options empty"), Pass), Counts.Metadata.Contains(TEXT(";Switch=Typhoeus_Alt_Seven,Alt Seven,2,Style,2,Typhoeus_Alt_Seven,|")));
+		TestTrue(*FString::Printf(TEXT("%s: root switch entry has labels and no parent"), Pass), Counts.Metadata.Contains(TEXT(";Switch=Style,Alt Five,3,,-1,Outfit style,A|B|C,000")));
+		TestTrue(*FString::Printf(TEXT("%s: shared stocking entry under style 2 marks its empty option"), Pass), Counts.Metadata.Contains(TEXT(";Switch=Stocking,Alt Eight,2,Style,2,Stocking,1|,01")));
+		TestTrue(*FString::Printf(TEXT("%s: stocking entry under style 0 marks option 0 empty"), Pass), Counts.Metadata.Contains(TEXT(";Switch=Stocking,Alt Eight,2,Style,0,Stocking,|2,10")));
+		TestTrue(*FString::Printf(TEXT("%s: unused switch marks both options empty"), Pass), Counts.Metadata.Contains(TEXT(";Switch=Typhoeus_Alt_Seven,Alt Seven,2,Style,2,Typhoeus_Alt_Seven,|,11")));
 
 		// Every managed material gets exactly the AND of its path; nothing else is touched.
 		const TMap<int32, TArray<FCondition>> Expected = ExpectedTyphoeusConditions();
