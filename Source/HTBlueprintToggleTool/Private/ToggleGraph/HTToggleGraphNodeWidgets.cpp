@@ -125,7 +125,7 @@ void SHTToggleGraphNode::AddPin(const TSharedRef<SGraphPin>& PinToAdd)
 	InputPins.Add(PinToAdd);
 }
 
-TSharedRef<SWidget> SHTToggleGraphNode::MakeTextField(const FText& Label, TAttribute<FText> Value, const FText& Hint, TFunction<void(const FString&)> OnCommit) const
+TSharedRef<SWidget> SHTToggleGraphNode::MakeTextField(const FText& Label, TAttribute<FText> Value, const FText& Hint, TFunction<void(const FString&)> OnCommit, const FText& Tooltip) const
 {
 	using namespace HTToggleGraphNodeWidgets;
 	return SNew(SHorizontalBox)
@@ -149,6 +149,7 @@ TSharedRef<SWidget> SHTToggleGraphNode::MakeTextField(const FText& Label, TAttri
 			.Font(FieldFont())
 			.Text(Value)
 			.HintText(Hint)
+			.ToolTipText(Tooltip)
 			.SelectAllTextWhenFocused(true)
 			.OnTextCommitted_Lambda([OnCommit](const FText& Text, ETextCommit::Type)
 			{
@@ -253,8 +254,9 @@ TSharedRef<SWidget> SHTToggleGraphNode_Switch::CreateFieldsArea()
 			MakeTextField(
 				LOCTEXT("CommentField", "Comment:"),
 				TAttribute<FText>::CreateLambda([WeakNode]() { return WeakNode.IsValid() ? FText::FromString(WeakNode->Label) : FText::GetEmpty(); }),
-				LOCTEXT("CommentHint", "Shown as the panel row name"),
-				[WeakNode](const FString& Value) { if (WeakNode.IsValid()) { WeakNode->SetLabelInline(Value); } })
+				LOCTEXT("SwitchCommentHint", "Note (not shown in game)"),
+				[WeakNode](const FString& Value) { if (WeakNode.IsValid()) { WeakNode->SetLabelInline(Value); } },
+				LOCTEXT("SwitchCommentTooltip", "Note for this graph only. It is not shown in game: the panel row is named after the variable."))
 		]
 		+ SVerticalBox::Slot()
 		.AutoHeight()

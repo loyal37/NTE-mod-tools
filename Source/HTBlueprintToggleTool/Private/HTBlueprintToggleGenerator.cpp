@@ -3198,11 +3198,9 @@ namespace HTToggleGenerator
 			const int32* ParentIndex = SwitchIndexById.Find(Trimmed(Switch.ParentNodeId));
 			const FString ParentVariable = ParentIndex ? Compiled.Variables[Compiled.SwitchVariableIndices[*ParentIndex]].VariableName.ToString() : FString();
 			const int32 ParentOption = ParentIndex ? Switch.ParentOption : INDEX_NONE;
-			FString Label = SanitizeNestedMetadataField(Switch.Label);
-			if (Label.IsEmpty())
-			{
-				Label = Variable.VariableName.ToString();
-			}
+			// The in-game panel names the row after the state variable. The switch comment is a
+			// graph-only note; the field keeps its position so older panels still parse it.
+			const FString Label = SanitizeNestedMetadataField(Variable.VariableName.ToString());
 			TArray<FString> OptionLabels;
 			// One character per option: '1' = nothing hangs on it (no part, no child switch).
 			// The panel uses this, not the labels, to decide between ON/OFF and cycle controls.

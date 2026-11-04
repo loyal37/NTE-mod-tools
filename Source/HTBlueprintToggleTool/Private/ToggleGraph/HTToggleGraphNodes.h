@@ -123,6 +123,7 @@ public:
 	static constexpr int32 MinOptions = 2;
 	static constexpr int32 MaxOptions = 64;
 
+	// Note for this graph only; it is not shown in game. The panel row is named after the variable.
 	UPROPERTY(EditAnywhere, Category = "Switch", meta = (DisplayName = "Comment"))
 	FString Label;
 

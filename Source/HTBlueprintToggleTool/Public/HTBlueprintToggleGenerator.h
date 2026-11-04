@@ -73,7 +73,8 @@ struct FHTNestedToggleSwitch
 {
 	// Identifier of the authoring node; reported back in error locations.
 	FString NodeId;
-	// Display label used by the in-game panel.
+	// Free-form note from the authoring node. Not shown in game: the panel row and the metadata
+	// label field use the state variable name.
 	FString Label;
 	// Optional explicit state variable name. Empty = derived from the graph and node id.
 	// Switches that share a key or an explicit variable name share one state variable.

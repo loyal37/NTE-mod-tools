@@ -36,7 +36,7 @@ protected:
 
 	UHTToggleGraphNode* GetToggleNode() const;
 	// "Label: [text box]" row. Commits only call OnCommit when the text changed.
-	TSharedRef<SWidget> MakeTextField(const FText& Label, TAttribute<FText> Value, const FText& Hint, TFunction<void(const FString&)> OnCommit) const;
+	TSharedRef<SWidget> MakeTextField(const FText& Label, TAttribute<FText> Value, const FText& Hint, TFunction<void(const FString&)> OnCommit, const FText& Tooltip = FText::GetEmpty()) const;
 	// "Label:" then "[ value ][+][-]".
 	TSharedRef<SWidget> MakeCounterField(const FText& Label, TAttribute<FText> Value, TFunction<void(int32)> OnStep) const;
 	static FSlateFontInfo FieldFont();
