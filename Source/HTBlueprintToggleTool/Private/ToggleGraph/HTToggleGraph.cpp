@@ -5,6 +5,7 @@
 #include "EdGraph/EdGraphSchema.h"
 #include "Engine/Blueprint.h"
 #include "Engine/SkeletalMesh.h"
+#include "HTToggleGraphNodes.h"
 #include "HTToggleGraphSchema.h"
 
 UHTToggleGraph* UHTToggleEdGraph::GetToggleGraphAsset() const
@@ -24,6 +25,14 @@ UEdGraph* UHTToggleGraph::EnsureGraph()
 		NewGraph->Schema = UHTToggleGraphSchema::StaticClass();
 		NewGraph->GetSchema()->CreateDefaultNodesForGraph(*NewGraph);
 		Graph = NewGraph;
+	}
+	// Older graphs may lack the trailing empty input on groups and the generate node.
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		if (UHTToggleGraphNode* ToggleNode = Cast<UHTToggleGraphNode>(Node))
+		{
+			ToggleNode->NormalizeDynamicInputs(false);
+		}
 	}
 	return Graph;
 }

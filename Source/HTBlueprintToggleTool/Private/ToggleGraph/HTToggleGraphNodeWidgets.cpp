@@ -474,14 +474,6 @@ TSharedRef<SWidget> SHTToggleGraphNode_Group::CreateFieldsArea()
 				TAttribute<FText>::CreateLambda([WeakNode]() { return WeakNode.IsValid() ? FText::FromString(WeakNode->Label) : FText::GetEmpty(); }),
 				FText::GetEmpty(),
 				[WeakNode](const FString& Value) { if (WeakNode.IsValid()) { WeakNode->SetLabelInline(Value); } })
-		]
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		[
-			MakeCounterField(
-				LOCTEXT("InputCountField", "Inputs:"),
-				TAttribute<FText>::CreateLambda([WeakNode]() { return WeakNode.IsValid() ? FText::AsNumber(WeakNode->InputCount) : FText::GetEmpty(); }),
-				[WeakNode](const int32 Delta) { if (WeakNode.IsValid()) { WeakNode->SetInputCountInline(WeakNode->InputCount + Delta); } })
 		];
 }
 

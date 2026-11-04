@@ -23,6 +23,7 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
+#include "ScopedTransaction.h"
 #include "NodeFactory.h"
 #include "RenderingThread.h"
 #include "SGraphPanel.h"
@@ -118,7 +119,9 @@ bool FHTToggleGraphInlineEditTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	TestEqual(TEXT("A new generate node has one empty input"), CountInputPins(Generate), 1);
 	TestTrue(TEXT("Switch -> generate"), Link(Graph, Switch->GetOutputPin(), Generate->GetInputPin()));
+	TestEqual(TEXT("Connecting the generate node's last input adds an empty one"), CountInputPins(Generate), 2);
 
 	// Option count +: new pins appear and existing links stay.
 	TestEqual(TEXT("A new switch has two option pins"), CountInputPins(Switch), 2);
@@ -183,18 +186,67 @@ bool FHTToggleGraphInlineEditTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Undo the untick"), GEditor->UndoTransaction());
 	TestTrue(TEXT("Undo restores the unticked slot"), Parts[0]->MaterialIDs == TArray<int32>({ 1, 2, 5, 12 }));
 
-	// Group inputs.
+	// Group inputs grow and shrink by themselves: always exactly one empty input at the end.
+	// Each connect/disconnect runs in a transaction, as the graph editor does for drags and breaks.
+	const UEdGraphSchema* Schema = Graph->GetSchema();
 	UHTToggleGraphNode_Group* Group = Spawn<UHTToggleGraphNode_Group>(Graph, -800, 0);
-	TestEqual(TEXT("A new group has two inputs"), CountInputPins(Group), 2);
-	TestTrue(TEXT("Group input count can be raised inline"), Group->SetInputCountInline(3));
-	TestTrue(TEXT("Part 2 -> group input 2"), Link(Graph, Parts[2]->GetOutputPin(), Group->GetGroupInputPin(1)));
-	TestTrue(TEXT("Part 3 -> group input 3"), Link(Graph, Parts[3]->GetOutputPin(), Group->GetGroupInputPin(2)));
-	TestTrue(TEXT("Group input count can be lowered inline"), Group->SetInputCountInline(2));
-	TestEqual(TEXT("Lowering group inputs removes trailing pins"), CountInputPins(Group), 2);
-	TestTrue(TEXT("Group input 2 keeps its link"), IsLinked(Parts[2]->GetOutputPin(), Group->GetGroupInputPin(1)));
-	TestTrue(TEXT("Removed group inputs release their parts"), Parts[3]->GetOutputPin()->LinkedTo.IsEmpty());
-	TestTrue(TEXT("Undo the group change"), GEditor->UndoTransaction());
-	TestTrue(TEXT("Undo restores the group input link"), IsLinked(Parts[3]->GetOutputPin(), Group->GetGroupInputPin(2)));
+	UHTToggleGraphNode_Part* Members[3] = {
+		Spawn<UHTToggleGraphNode_Part>(Graph, -1200, -200),
+		Spawn<UHTToggleGraphNode_Part>(Graph, -1200, 0),
+		Spawn<UHTToggleGraphNode_Part>(Graph, -1200, 200) };
+	auto Connect = [&](UHTToggleGraphNode_Part* Part, const int32 Input)
+	{
+		const FScopedTransaction Transaction(FText::FromString(TEXT("Connect")));
+		return Link(Graph, Part->GetOutputPin(), Group->GetGroupInputPin(Input));
+	};
+	auto Disconnect = [&](UHTToggleGraphNode_Part* Part, const int32 Input)
+	{
+		const FScopedTransaction Transaction(FText::FromString(TEXT("Disconnect")));
+		Schema->BreakSinglePinLink(Part->GetOutputPin(), Group->GetGroupInputPin(Input));
+	};
+	TestEqual(TEXT("A new group has one empty input"), CountInputPins(Group), 1);
+	TestTrue(TEXT("Member 1 -> group input 1"), Connect(Members[0], 0));
+	TestEqual(TEXT("Connecting the last input adds an empty one"), CountInputPins(Group), 2);
+	TestTrue(TEXT("The new input is empty"), Group->GetGroupInputPin(1) && Group->GetGroupInputPin(1)->LinkedTo.IsEmpty());
+	TestTrue(TEXT("Member 2 -> group input 2"), Connect(Members[1], 1));
+	TestTrue(TEXT("Member 3 -> group input 3"), Connect(Members[2], 2));
+	TestEqual(TEXT("Every filled last input adds one more"), CountInputPins(Group), 4);
+	TestEqual(TEXT("New inputs are labeled in order"), Group->GetGroupInputPin(3)->PinFriendlyName.ToString(), FString(TEXT("In 4")));
+
+	Disconnect(Members[1], 1);
+	TestEqual(TEXT("A middle input stays when it is disconnected"), CountInputPins(Group), 4);
+	TestTrue(TEXT("Later links keep their inputs"), IsLinked(Members[2]->GetOutputPin(), Group->GetGroupInputPin(2)));
+	Disconnect(Members[2], 2);
+	TestEqual(TEXT("Disconnecting the last link shrinks to one empty input after the last link"), CountInputPins(Group), 2);
+	TestTrue(TEXT("The first link stays"), IsLinked(Members[0]->GetOutputPin(), Group->GetGroupInputPin(0)));
+
+	TestTrue(TEXT("Undo the last disconnect"), GEditor->UndoTransaction());
+	TestEqual(TEXT("Undo restores the inputs"), CountInputPins(Group), 4);
+	TestTrue(TEXT("Undo restores the link"), IsLinked(Members[2]->GetOutputPin(), Group->GetGroupInputPin(2)));
+	TestTrue(TEXT("Undo the middle disconnect"), GEditor->UndoTransaction());
+	TestTrue(TEXT("Undo restores the middle link"), IsLinked(Members[1]->GetOutputPin(), Group->GetGroupInputPin(1)));
+	TestTrue(TEXT("Undo the third connect"), GEditor->UndoTransaction());
+	TestEqual(TEXT("Undoing a connect removes the input it added"), CountInputPins(Group), 3);
+	TestTrue(TEXT("Redo the third connect"), GEditor->RedoTransaction());
+	TestEqual(TEXT("Redo adds it again"), CountInputPins(Group), 4);
+
+	// Moving a member elsewhere (the output can only hang on one place) also shrinks the group.
+	{
+		const FScopedTransaction Transaction(FText::FromString(TEXT("Move")));
+		TestTrue(TEXT("Member 3 moves to the generate node"), Link(Graph, Members[2]->GetOutputPin(), Generate->GetDynamicInputPin(1)));
+	}
+	TestEqual(TEXT("Taking the last member away shrinks the group"), CountInputPins(Group), 3);
+	TestEqual(TEXT("The generate node grew for its new link"), CountInputPins(Generate), 3);
+
+	// Deleting a member node notifies the group through NodeConnectionListChanged.
+	{
+		const FScopedTransaction Transaction(FText::FromString(TEXT("Delete")));
+		Graph->Modify();
+		Members[1]->Modify();
+		Members[1]->DestroyNode();
+	}
+	TestEqual(TEXT("Deleting the last member shrinks the group"), CountInputPins(Group), 2);
+	TestTrue(TEXT("Exactly one empty input remains at the end"), Group->GetGroupInputPin(1) && Group->GetGroupInputPin(1)->LinkedTo.IsEmpty() && !Group->GetGroupInputPin(0)->LinkedTo.IsEmpty());
 	TestEqual(TEXT("The first group input keeps the v1.5.30 pin name"), Group->GetGroupInputPin(0) ? Group->GetGroupInputPin(0)->PinName : NAME_None, UHTToggleGraphNode::InputPinName);
 	return !HasAnyErrors();
 }
@@ -298,8 +350,8 @@ bool FHTToggleGraphNodeWidgetsTest::RunTest(const FString& Parameters)
 	const FExpectedWidget Expected[] = {
 		{ Style, TEXT("SHTToggleGraphNode_Switch"), 3, 1 },
 		{ PartA, TEXT("SHTToggleGraphNode_Part"), 0, 1 },
-		{ Group, TEXT("SHTToggleGraphNode_Group"), 2, 1 },
-		{ Generate, TEXT("SHTToggleGraphNode"), 1, 0 } };
+		{ Group, TEXT("SHTToggleGraphNode_Group"), 3, 1 },
+		{ Generate, TEXT("SHTToggleGraphNode"), 2, 0 } };
 	for (const FExpectedWidget& Entry : Expected)
 	{
 		TSharedPtr<SGraphNode> Widget = FNodeFactory::CreateNodeWidget(Entry.Node);

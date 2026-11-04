@@ -4,6 +4,7 @@
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraph/EdGraphSchema.h"
 #include "HTToggleGraph.h"
+#include "Misc/ScopeExit.h"
 #include "ScopedTransaction.h"
 
 #define LOCTEXT_NAMESPACE "HTToggleGraphNodes"
@@ -65,6 +66,123 @@ bool UHTToggleGraphNode::SetLabelInline(const FString& NewLabel)
 	Modify();
 	*Target = Trimmed;
 	return true;
+}
+
+FName UHTToggleGraphNode::DynamicInputPinName(const int32 Index)
+{
+	// The first pin keeps the original name so graphs saved by v1.5.30 keep their links.
+	return Index == 0 ? InputPinName : FName(*FString::Printf(TEXT("In_%d"), Index));
+}
+
+UEdGraphPin* UHTToggleGraphNode::GetDynamicInputPin(const int32 Index) const
+{
+	const FName Name = DynamicInputPinName(Index);
+	for (UEdGraphPin* Pin : Pins)
+	{
+		if (Pin && Pin->Direction == EGPD_Input && Pin->PinName == Name)
+		{
+			return Pin;
+		}
+	}
+	return nullptr;
+}
+
+void UHTToggleGraphNode::AllocateDynamicInputPins()
+{
+	InputCount = FMath::Clamp(InputCount, 1, MaxDynamicInputs);
+	for (int32 Index = 0; Index < InputCount; ++Index)
+	{
+		UEdGraphPin* In = CreatePin(EGPD_Input, PinCategory, DynamicInputPinName(Index));
+		In->PinFriendlyName = FText::Format(LOCTEXT("DynamicInput", "In {0}"), FText::AsNumber(Index + 1));
+	}
+}
+
+bool UHTToggleGraphNode::NormalizeDynamicInputs(const bool bRecord)
+{
+	if (!HasDynamicInputs() || bNormalizingInputs)
+	{
+		return false;
+	}
+	bNormalizingInputs = true;
+	ON_SCOPE_EXIT
+	{
+		bNormalizingInputs = false;
+	};
+
+	int32 Present = 0;
+	while (Present < MaxDynamicInputs && GetDynamicInputPin(Present))
+	{
+		++Present;
+	}
+	int32 LastLinked = INDEX_NONE;
+	for (int32 Index = 0; Index < Present; ++Index)
+	{
+		if (!GetDynamicInputPin(Index)->LinkedTo.IsEmpty())
+		{
+			LastLinked = Index;
+		}
+	}
+	// Keep everything up to the last linked input plus exactly one empty input after it.
+	const int32 Desired = FMath::Clamp(LastLinked + 2, 1, MaxDynamicInputs);
+	if (Desired == Present && InputCount == Present)
+	{
+		return false;
+	}
+	if (bRecord)
+	{
+		Modify();
+	}
+	for (int32 Index = Present; Index < Desired; ++Index)
+	{
+		UEdGraphPin* In = CreatePin(EGPD_Input, PinCategory, DynamicInputPinName(Index));
+		In->PinFriendlyName = FText::Format(LOCTEXT("DynamicInput", "In {0}"), FText::AsNumber(Index + 1));
+	}
+	for (int32 Index = Present - 1; Index >= Desired; --Index)
+	{
+		// Only empty inputs after the last link are removed. The pin memory stays valid until
+		// the pin deletion queue ticks, so callers further up the connection call stack are safe.
+		if (UEdGraphPin* Pin = GetDynamicInputPin(Index))
+		{
+			Pins.Remove(Pin);
+			Pin->MarkAsGarbage();
+		}
+	}
+	InputCount = Desired;
+	if (bRecord)
+	{
+		if (UEdGraph* Graph = GetGraph())
+		{
+			Graph->NotifyNodeChanged(this);
+		}
+	}
+	return true;
+}
+
+void UHTToggleGraphNode::PinConnectionListChanged(UEdGraphPin* Pin)
+{
+	Super::PinConnectionListChanged(Pin);
+	NormalizeDynamicInputs(true);
+}
+
+void UHTToggleGraphNode::NodeConnectionListChanged()
+{
+	Super::NodeConnectionListChanged();
+	NormalizeDynamicInputs(true);
+}
+
+void UHTToggleGraphNode::PostLoad()
+{
+	Super::PostLoad();
+	if (HasDynamicInputs())
+	{
+		// Graphs saved before InputCount existed (v1.5.30) have one input pin.
+		int32 Present = 0;
+		while (Present < MaxDynamicInputs && GetDynamicInputPin(Present))
+		{
+			++Present;
+		}
+		InputCount = FMath::Max(1, Present);
+	}
 }
 
 FText UHTToggleGraphNode::GetNodeTitle(ENodeTitleType::Type TitleType) const
@@ -403,25 +521,6 @@ bool UHTToggleGraphNode_Switch::SetOptionLabelInline(const int32 Option, const F
 
 // ---------------------------------------------------------------- Group
 
-FName UHTToggleGraphNode_Group::GroupInputPinName(const int32 Index)
-{
-	// The first pin keeps the original name so graphs saved by v1.5.30 keep their links.
-	return Index == 0 ? InputPinName : FName(*FString::Printf(TEXT("In_%d"), Index));
-}
-
-UEdGraphPin* UHTToggleGraphNode_Group::GetGroupInputPin(const int32 Index) const
-{
-	const FName Name = GroupInputPinName(Index);
-	for (UEdGraphPin* Pin : Pins)
-	{
-		if (Pin && Pin->Direction == EGPD_Input && Pin->PinName == Name)
-		{
-			return Pin;
-		}
-	}
-	return nullptr;
-}
-
 FString UHTToggleGraphNode_Group::GetDisplayLabel() const
 {
 	const FString Trimmed = Label.TrimStartAndEnd();
@@ -430,48 +529,14 @@ FString UHTToggleGraphNode_Group::GetDisplayLabel() const
 
 void UHTToggleGraphNode_Group::AllocateDefaultPins()
 {
-	InputCount = FMath::Clamp(InputCount, MinInputs, MaxInputs);
 	UEdGraphPin* Out = CreatePin(EGPD_Output, PinCategory, OutputPinName);
 	Out->PinFriendlyName = LOCTEXT("GroupOutput", "Out");
-	for (int32 Index = 0; Index < InputCount; ++Index)
-	{
-		UEdGraphPin* In = CreatePin(EGPD_Input, PinCategory, GroupInputPinName(Index));
-		In->PinFriendlyName = FText::Format(LOCTEXT("GroupInput", "In {0}"), FText::AsNumber(Index + 1));
-	}
+	AllocateDynamicInputPins();
 }
 
 FLinearColor UHTToggleGraphNode_Group::GetNodeTitleColor() const
 {
 	return FLinearColor(0.30f, 0.30f, 0.34f);
-}
-
-void UHTToggleGraphNode_Group::PostLoad()
-{
-	Super::PostLoad();
-	// Graphs saved before Input Count existed have one input pin.
-	int32 InputPins = 0;
-	for (const UEdGraphPin* Pin : Pins)
-	{
-		InputPins += Pin && Pin->Direction == EGPD_Input ? 1 : 0;
-	}
-	if (InputPins > 0)
-	{
-		InputCount = InputPins;
-	}
-}
-
-bool UHTToggleGraphNode_Group::SetInputCountInline(const int32 NewInputCount)
-{
-	const int32 Clamped = FMath::Clamp(NewInputCount, MinInputs, MaxInputs);
-	if (Clamped == InputCount)
-	{
-		return false;
-	}
-	const FScopedTransaction Transaction(LOCTEXT("EditGroupInputs", "Change Group Input Count"));
-	Modify();
-	InputCount = Clamped;
-	ReconstructNode();
-	return true;
 }
 
 // ---------------------------------------------------------------- Generate
@@ -483,8 +548,7 @@ FString UHTToggleGraphNode_Generate::GetDisplayLabel() const
 
 void UHTToggleGraphNode_Generate::AllocateDefaultPins()
 {
-	UEdGraphPin* In = CreatePin(EGPD_Input, PinCategory, InputPinName);
-	In->PinFriendlyName = LOCTEXT("GenerateInput", "In");
+	AllocateDynamicInputPins();
 }
 
 FLinearColor UHTToggleGraphNode_Generate::GetNodeTitleColor() const

@@ -437,6 +437,13 @@ void FHTToggleGraphEditor::PasteNodes()
 		Node->SnapToGrid(16);
 		Node->CreateNewGuid();
 	}
+	for (UEdGraphNode* Node : PastedNodes)
+	{
+		if (UHTToggleGraphNode* ToggleNode = Cast<UHTToggleGraphNode>(Node))
+		{
+			ToggleNode->NormalizeDynamicInputs(true);
+		}
+	}
 	GraphEditor->NotifyGraphChanged();
 	Asset->MarkPackageDirty();
 }

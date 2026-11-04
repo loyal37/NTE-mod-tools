@@ -32,6 +32,18 @@ public:
 	bool SetLabelInline(const FString& NewLabel);
 	virtual FString GetLabel() const { return FString(); }
 
+	// Growing input list (Group, Generate): the node always ends with exactly one empty input.
+	// Connecting the last input adds a new empty one; disconnecting trims surplus empty inputs at
+	// the end. Empty inputs in the middle stay so the order of the other links never changes.
+	static constexpr int32 MaxDynamicInputs = 32;
+	static FName DynamicInputPinName(int32 Index);
+	virtual bool HasDynamicInputs() const { return false; }
+	UEdGraphPin* GetDynamicInputPin(int32 Index) const;
+	int32 GetDynamicInputCount() const { return InputCount; }
+	// bRecord = true: Modify() (joins the caller's transaction) and refresh the node widget.
+	// bRecord = false: silent fix-up while loading or opening the editor; does not dirty the asset.
+	bool NormalizeDynamicInputs(bool bRecord = true);
+
 	//~ UEdGraphNode
 	virtual FText GetNodeTitle(ENodeTitleType::Type TitleType) const override;
 	virtual FText GetTooltipText() const override;
@@ -41,9 +53,20 @@ public:
 	virtual void AutowireNewNode(UEdGraphPin* FromPin) override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	virtual void ReconstructNode() override;
+	virtual void PinConnectionListChanged(UEdGraphPin* Pin) override;
+	virtual void NodeConnectionListChanged() override;
+	virtual void PostLoad() override;
 
 protected:
 	virtual FString* GetMutableLabel() { return nullptr; }
+	void AllocateDynamicInputPins();
+
+	// Number of dynamic input pins (Group, Generate). Managed automatically, not user-editable.
+	UPROPERTY()
+	int32 InputCount = 1;
+
+private:
+	bool bNormalizingInputs = false;
 };
 
 // Part: material IDs of the preview mesh. One output that hangs on a switch option,
@@ -137,25 +160,18 @@ class UHTToggleGraphNode_Group : public UHTToggleGraphNode
 	GENERATED_BODY()
 
 public:
-	static constexpr int32 MinInputs = 1;
-	static constexpr int32 MaxInputs = 32;
-	static FName GroupInputPinName(int32 Index);
+	static FName GroupInputPinName(int32 Index) { return DynamicInputPinName(Index); }
 
 	UPROPERTY(EditAnywhere, Category = "Group", meta = (DisplayName = "Comment"))
 	FString Label;
 
-	UPROPERTY(EditAnywhere, Category = "Group", meta = (DisplayName = "Input Count", ClampMin = 1, ClampMax = 32))
-	int32 InputCount = 2;
+	UEdGraphPin* GetGroupInputPin(int32 Index) const { return GetDynamicInputPin(Index); }
 
-	UEdGraphPin* GetGroupInputPin(int32 Index) const;
-	// Adds or removes input pins at the end; links on the remaining pins are kept.
-	bool SetInputCountInline(int32 NewInputCount);
-
+	virtual bool HasDynamicInputs() const override { return true; }
 	virtual FString GetLabel() const override { return Label; }
 	virtual FString GetDisplayLabel() const override;
 	virtual void AllocateDefaultPins() override;
 	virtual FLinearColor GetNodeTitleColor() const override;
-	virtual void PostLoad() override;
 
 protected:
 	virtual FString* GetMutableLabel() override { return &Label; }
@@ -168,6 +184,7 @@ class UHTToggleGraphNode_Generate : public UHTToggleGraphNode
 	GENERATED_BODY()
 
 public:
+	virtual bool HasDynamicInputs() const override { return true; }
 	virtual FString GetDisplayLabel() const override;
 	virtual void AllocateDefaultPins() override;
 	virtual FLinearColor GetNodeTitleColor() const override;
