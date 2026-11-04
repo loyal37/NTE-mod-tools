@@ -36,6 +36,7 @@ public class HTBlueprintToggleTool : ModuleRules
 				"Slate",
 				"SlateCore",
 				"ToolMenus",
+				"UMG",
 				"UnrealEd"
 			}
 		);

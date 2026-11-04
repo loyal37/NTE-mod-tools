@@ -616,7 +616,7 @@ void SHTBlueprintToggleToolPanel::Construct(const FArguments& InArgs)
 							.AutoWidth()
 							.VAlign(VAlign_Center)
 							[
-								SNew(STextBlock).Text(LOCTEXT("ToggleGraphButton", "\u6253\u5F00\u84DD\u56FE"))
+								SNew(STextBlock).Text(LOCTEXT("ToggleGraphButton", "Open Blueprint"))
 							]
 						]
 					]

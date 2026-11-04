@@ -2,6 +2,7 @@
 
 #include "EdGraph/EdGraph.h"
 #include "EdGraphUtilities.h"
+#include "Editor.h"
 #include "Framework/Commands/GenericCommands.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -26,10 +27,40 @@ const FName FHTToggleGraphEditor::DetailsTabId(TEXT("HTToggleGraphEditor_Details
 const FName FHTToggleGraphEditor::ResultTabId(TEXT("HTToggleGraphEditor_Result"));
 const FName FHTToggleGraphEditor::AppIdentifier(TEXT("HTToggleGraphEditorApp"));
 
+FHTToggleGraphEditor::~FHTToggleGraphEditor()
+{
+	if (GEditor)
+	{
+		GEditor->UnregisterForUndo(this);
+	}
+}
+
+void FHTToggleGraphEditor::PostUndo(bool bSuccess)
+{
+	if (GraphEditor.IsValid())
+	{
+		GraphEditor->ClearSelectionSet();
+		GraphEditor->NotifyGraphChanged();
+	}
+	if (DetailsView.IsValid())
+	{
+		DetailsView->ForceRefresh();
+	}
+}
+
+void FHTToggleGraphEditor::PostRedo(bool bSuccess)
+{
+	PostUndo(bSuccess);
+}
+
 void FHTToggleGraphEditor::InitEditor(EToolkitMode::Type Mode, const TSharedPtr<IToolkitHost>& InitToolkitHost, UHTToggleGraph* InAsset)
 {
 	Asset = InAsset;
 	Asset->EnsureGraph();
+	if (GEditor)
+	{
+		GEditor->RegisterForUndo(this);
+	}
 
 	FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
 	FDetailsViewArgs DetailsArgs;
@@ -80,15 +111,15 @@ void FHTToggleGraphEditor::RegisterTabSpawners(const TSharedRef<FTabManager>& In
 	WorkspaceMenuCategory = InTabManager->AddLocalWorkspaceMenuCategory(LOCTEXT("WorkspaceMenu", "HT Toggle Graph"));
 	FAssetEditorToolkit::RegisterTabSpawners(InTabManager);
 	InTabManager->RegisterTabSpawner(GraphTabId, FOnSpawnTab::CreateSP(this, &FHTToggleGraphEditor::SpawnGraphTab))
-		.SetDisplayName(LOCTEXT("GraphTab", "蓝图"))
+		.SetDisplayName(LOCTEXT("GraphTab", "Graph"))
 		.SetGroup(WorkspaceMenuCategory.ToSharedRef())
 		.SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "GraphEditor.EventGraph_16x"));
 	InTabManager->RegisterTabSpawner(DetailsTabId, FOnSpawnTab::CreateSP(this, &FHTToggleGraphEditor::SpawnDetailsTab))
-		.SetDisplayName(LOCTEXT("DetailsTab", "属性"))
+		.SetDisplayName(LOCTEXT("DetailsTab", "Details"))
 		.SetGroup(WorkspaceMenuCategory.ToSharedRef())
 		.SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Details"));
 	InTabManager->RegisterTabSpawner(ResultTabId, FOnSpawnTab::CreateSP(this, &FHTToggleGraphEditor::SpawnResultTab))
-		.SetDisplayName(LOCTEXT("ResultTab", "结果"))
+		.SetDisplayName(LOCTEXT("ResultTab", "Result"))
 		.SetGroup(WorkspaceMenuCategory.ToSharedRef())
 		.SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Info"));
 }
@@ -124,7 +155,7 @@ FLinearColor FHTToggleGraphEditor::GetWorldCentricTabColorScale() const
 TSharedRef<SDockTab> FHTToggleGraphEditor::SpawnGraphTab(const FSpawnTabArgs& Args)
 {
 	return SNew(SDockTab)
-		.Label(LOCTEXT("GraphTabLabel", "蓝图"))
+		.Label(LOCTEXT("GraphTabLabel", "Graph"))
 		[
 			GraphEditor.ToSharedRef()
 		];
@@ -133,7 +164,7 @@ TSharedRef<SDockTab> FHTToggleGraphEditor::SpawnGraphTab(const FSpawnTabArgs& Ar
 TSharedRef<SDockTab> FHTToggleGraphEditor::SpawnDetailsTab(const FSpawnTabArgs& Args)
 {
 	return SNew(SDockTab)
-		.Label(LOCTEXT("DetailsTabLabel", "属性"))
+		.Label(LOCTEXT("DetailsTabLabel", "Details"))
 		[
 			DetailsView.ToSharedRef()
 		];
@@ -142,7 +173,7 @@ TSharedRef<SDockTab> FHTToggleGraphEditor::SpawnDetailsTab(const FSpawnTabArgs& 
 TSharedRef<SDockTab> FHTToggleGraphEditor::SpawnResultTab(const FSpawnTabArgs& Args)
 {
 	return SNew(SDockTab)
-		.Label(LOCTEXT("ResultTabLabel", "结果"))
+		.Label(LOCTEXT("ResultTabLabel", "Result"))
 		[
 			SNew(SScrollBox)
 			+ SScrollBox::Slot()
@@ -150,7 +181,7 @@ TSharedRef<SDockTab> FHTToggleGraphEditor::SpawnResultTab(const FSpawnTabArgs& A
 			[
 				SAssignNew(ResultText, STextBlock)
 				.AutoWrapText(true)
-				.Text(LOCTEXT("ResultHint", "Draw the tree, then press 编译 to generate the Animation Blueprint nodes."))
+				.Text(LOCTEXT("ResultHint", "Draw the tree, then press Compile to generate the Animation Blueprint nodes."))
 			]
 		];
 }
@@ -195,7 +226,7 @@ void FHTToggleGraphEditor::ExtendToolbar()
 			Builder.AddToolBarButton(
 				FUIAction(FExecuteAction::CreateSP(this, &FHTToggleGraphEditor::Compile)),
 				NAME_None,
-				LOCTEXT("CompileButton", "编译"),
+				LOCTEXT("CompileButton", "Compile"),
 				LOCTEXT("CompileTooltip", "Convert the tree into Animation Blueprint nodes (replaces the previous tree of the same name)."),
 				FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Refresh"));
 			Builder.EndSection();

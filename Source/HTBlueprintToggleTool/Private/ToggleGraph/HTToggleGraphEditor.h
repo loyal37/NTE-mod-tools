@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GraphEditor.h"
+#include "EditorUndoClient.h"
 #include "Toolkits/AssetEditorToolkit.h"
 
 class IDetailsView;
@@ -9,10 +10,15 @@ class STextBlock;
 class UHTToggleGraph;
 
 // Asset editor for UHTToggleGraph: graph canvas, details of the selected nodes (or the asset),
-// a result panel, and a toolbar "编译" button that generates the Animation Blueprint nodes.
-class FHTToggleGraphEditor : public FAssetEditorToolkit
+// a result panel, and a toolbar "Compile" button that generates the Animation Blueprint nodes.
+class FHTToggleGraphEditor : public FAssetEditorToolkit, public FEditorUndoClient
 {
 public:
+	virtual ~FHTToggleGraphEditor() override;
+
+	//~ FEditorUndoClient: rebuild node widgets after undo/redo of inline edits.
+	virtual void PostUndo(bool bSuccess) override;
+	virtual void PostRedo(bool bSuccess) override;
 	static const FName GraphTabId;
 	static const FName DetailsTabId;
 	static const FName ResultTabId;

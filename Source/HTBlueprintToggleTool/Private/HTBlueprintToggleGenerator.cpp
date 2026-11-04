@@ -3568,7 +3568,7 @@ FString FHTNestedToggleIssue::ToDisplayString() const
 FString FHTNestedToggleGeneratorResult::ToDisplayString() const
 {
 	TArray<FString> Lines;
-	Lines.Add(bSuccess ? TEXT("生成完成") : TEXT("生成失败"));
+	Lines.Add(bSuccess ? TEXT("Toggle tree generated.") : TEXT("Toggle tree generation failed."));
 	for (const FHTNestedToggleIssue& Error : Errors)
 	{
 		Lines.Add(TEXT("Error: ") + Error.ToDisplayString());
@@ -3617,14 +3617,39 @@ FHTNestedToggleGeneratorResult FHTBlueprintToggleGenerator::GenerateNestedVisibi
 
 	// Graph-building helpers report plain messages; keep them in a legacy result and merge at the end.
 	FHTBlueprintToggleGeneratorResult Inner;
-	auto Finish = [&Result, &Inner]() -> FHTNestedToggleGeneratorResult&
+	// The shared helpers predate this feature and report some messages in Chinese; the toggle
+	// tree UI is English, so translate those fragments here instead of changing the helpers.
+	auto ToEnglish = [](FString Text)
+	{
+		static const TCHAR* const Fragments[][2] = {
+			{ TEXT("\u8FDE\u7EBF\u5931\u8D25\uFF0C\u7F3A\u5C11 Pin: "), TEXT("Connection failed, missing pin: ") },
+			{ TEXT("\u8FDE\u7EBF\u5931\u8D25: "), TEXT("Connection failed: ") },
+			{ TEXT("\u627E\u4E0D\u5230\u51FD\u6570: "), TEXT("Function not found: ") },
+			{ TEXT(" \u52A0\u8F7D\u5931\u8D25: "), TEXT(" could not be loaded: ") },
+			{ TEXT(" \u5DF2\u6DFB\u52A0 int \u53D8\u91CF: "), TEXT(" added int variable: ") },
+			{ TEXT(" \u5DF2\u5B58\u5728\u53D8\u91CF: "), TEXT(" variable already exists: ") },
+			{ TEXT(" \u6DFB\u52A0\u53D8\u91CF\u5931\u8D25: "), TEXT(" could not add variable: ") },
+			{ TEXT("\u5DF2\u521B\u5EFA\u4E8B\u4EF6\u8282\u70B9: "), TEXT("Created event node: ") },
+			{ TEXT("\u65E0\u6CD5\u521B\u5EFA\u6216\u627E\u5230\u4E8B\u4EF6\u8282\u70B9: "), TEXT("Could not create or find event node: ") },
+			{ TEXT("\u4E8B\u4EF6\u6CA1\u6709\u6267\u884C\u8F93\u51FA: "), TEXT("Event has no execution output: ") },
+		};
+		for (const auto& Fragment : Fragments)
+		{
+			Text.ReplaceInline(Fragment[0], Fragment[1]);
+		}
+		return Text;
+	};
+	auto Finish = [&Result, &Inner, &ToEnglish]() -> FHTNestedToggleGeneratorResult&
 	{
 		for (const FString& Error : Inner.Errors)
 		{
 			FHTNestedToggleIssue& Issue = Result.Errors.AddDefaulted_GetRef();
-			Issue.Message = Error;
+			Issue.Message = ToEnglish(Error);
 		}
-		Result.Messages.Append(Inner.Messages);
+		for (const FString& Message : Inner.Messages)
+		{
+			Result.Messages.Add(ToEnglish(Message));
+		}
 		Result.bSuccess = Result.Errors.IsEmpty();
 		return Result;
 	};

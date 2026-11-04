@@ -41,19 +41,19 @@ void UHTToggleGraphSchema::GetGraphContextActions(FGraphContextMenuBuilder& Cont
 {
 	ContextMenuBuilder.AddAction(MakeShared<FHTToggleGraphSchemaAction_NewNode>(
 		UHTToggleGraphNode_Part::StaticClass(),
-		LOCTEXT("AddPart", "部件"),
+		LOCTEXT("AddPart", "Part"),
 		LOCTEXT("AddPartTooltip", "Material IDs that show together. Connect its output to a switch option, a group or the generate node.")));
 	ContextMenuBuilder.AddAction(MakeShared<FHTToggleGraphSchemaAction_NewNode>(
 		UHTToggleGraphNode_Switch::StaticClass(),
-		LOCTEXT("AddSwitch", "切换"),
+		LOCTEXT("AddSwitch", "Switch"),
 		LOCTEXT("AddSwitchTooltip", "A key-driven switch. Parts or other switches hang on its options; its output hangs on a parent option, a group or the generate node.")));
 	ContextMenuBuilder.AddAction(MakeShared<FHTToggleGraphSchemaAction_NewNode>(
 		UHTToggleGraphNode_Group::StaticClass(),
-		LOCTEXT("AddGroup", "群组"),
+		LOCTEXT("AddGroup", "Group"),
 		LOCTEXT("AddGroupTooltip", "Merges several connections into one.")));
 	ContextMenuBuilder.AddAction(MakeShared<FHTToggleGraphSchemaAction_NewNode>(
 		UHTToggleGraphNode_Generate::StaticClass(),
-		LOCTEXT("AddGenerate", "生成"),
+		LOCTEXT("AddGenerate", "Generate"),
 		LOCTEXT("AddGenerateTooltip", "Root of the tree. Everything connected to it is compiled into the Animation Blueprint.")));
 }
 

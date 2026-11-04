@@ -6,6 +6,7 @@
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraph/EdGraphSchema.h"
+#include "EdGraphUtilities.h"
 #include "Engine/Blueprint.h"
 #include "FileHelpers.h"
 #include "HAL/IConsoleManager.h"
@@ -17,6 +18,7 @@
 #include "ObjectTools.h"
 #include "PropertyEditorModule.h"
 #include "SHTBlueprintToggleToolPanel.h"
+#include "ToggleGraph/HTToggleGraphNodeWidgets.h"
 #include "ToggleGraph/HTToggleGraphNodes.h"
 #include "ToggleGraph/HTToggleGraphPartDetails.h"
 #include "ToolMenus.h"
@@ -176,6 +178,9 @@ void FHTBlueprintToggleToolModule::StartupModule()
 	PropertyModule.RegisterCustomClassLayout(
 		UHTToggleGraphNode_Part::StaticClass()->GetFName(),
 		FOnGetDetailCustomizationInstance::CreateStatic(&FHTToggleGraphPartDetails::MakeInstance));
+	// Toggle graph nodes draw their parameters inside the node (LoyalTools style).
+	ToggleGraphNodeFactory = MakeShared<FHTToggleGraphNodeFactory>();
+	FEdGraphUtilities::RegisterVisualNodeFactory(ToggleGraphNodeFactory);
 
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
 		ToolTabName,
@@ -214,6 +219,11 @@ void FHTBlueprintToggleToolModule::StartupModule()
 
 void FHTBlueprintToggleToolModule::ShutdownModule()
 {
+	if (ToggleGraphNodeFactory.IsValid())
+	{
+		FEdGraphUtilities::UnregisterVisualNodeFactory(ToggleGraphNodeFactory);
+		ToggleGraphNodeFactory.Reset();
+	}
 	if (FPropertyEditorModule* PropertyModule = FModuleManager::GetModulePtr<FPropertyEditorModule>("PropertyEditor"))
 	{
 		PropertyModule->UnregisterCustomClassLayout(UHTToggleGraphNode_Part::StaticClass()->GetFName());

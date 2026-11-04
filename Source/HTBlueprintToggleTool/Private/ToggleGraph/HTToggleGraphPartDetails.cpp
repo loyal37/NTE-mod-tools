@@ -33,7 +33,7 @@ void FHTToggleGraphPartDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBui
 		return;
 	}
 
-	IDetailCategoryBuilder& Category = DetailBuilder.EditCategory("MaterialSlots", LOCTEXT("MaterialSlots", "材质槽"), ECategoryPriority::Important);
+	IDetailCategoryBuilder& Category = DetailBuilder.EditCategory("MaterialSlots", LOCTEXT("MaterialSlots", "Material Slots"), ECategoryPriority::Important);
 	const UHTToggleGraph* Asset = Node->GetToggleGraphAsset();
 	USkeletalMesh* Mesh = Asset ? Asset->ResolvePreviewMesh() : nullptr;
 	if (!Mesh)
@@ -43,7 +43,7 @@ void FHTToggleGraphPartDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBui
 			[
 				SNew(STextBlock)
 				.AutoWrapText(true)
-				.Text(LOCTEXT("NoMesh", "Set the asset's Animation Blueprint (deselect all nodes) to list the preview mesh material slots here."))
+				.Text(LOCTEXT("NoMesh", "Set the asset's Anim Blueprint (deselect all nodes) to list the preview mesh material slots here."))
 			];
 		return;
 	}

@@ -3,6 +3,7 @@
 #include "Modules/ModuleManager.h"
 
 class FAutoConsoleCommand;
+struct FGraphPanelNodeFactory;
 class SHTBlueprintToggleToolPanel;
 
 class FHTBlueprintToggleToolModule : public IModuleInterface
@@ -28,4 +29,5 @@ private:
 	TUniquePtr<FAutoConsoleCommand> OpenMaterialSlotMapperConsoleCommand;
 	TUniquePtr<FAutoConsoleCommand> MigrateSaveSlotNamesConsoleCommand;
 	TUniquePtr<FAutoConsoleCommand> MigrateSaveSlotNamesAndExitConsoleCommand;
+	TSharedPtr<FGraphPanelNodeFactory> ToggleGraphNodeFactory;
 };
