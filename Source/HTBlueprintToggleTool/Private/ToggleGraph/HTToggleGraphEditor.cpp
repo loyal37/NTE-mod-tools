@@ -329,24 +329,33 @@ void FHTToggleGraphEditor::SelectAllNodes()
 	}
 }
 
+void FHTToggleGraphEditor::DeleteNodesFromGraph(UEdGraph* Graph, const FGraphPanelSelectionSet& Nodes)
+{
+	if (!Graph)
+	{
+		return;
+	}
+	const FScopedTransaction Transaction(FGenericCommands::Get().Delete->GetDescription());
+	Graph->Modify();
+	for (UObject* Object : Nodes)
+	{
+		if (UEdGraphNode* Node = Cast<UEdGraphNode>(Object); Node && Node->GetGraph() == Graph && Node->CanUserDeleteNode())
+		{
+			Node->Modify();
+			Node->DestroyNode();
+		}
+	}
+}
+
 void FHTToggleGraphEditor::DeleteSelectedNodes()
 {
 	if (!GraphEditor.IsValid())
 	{
 		return;
 	}
-	const FScopedTransaction Transaction(FGenericCommands::Get().Delete->GetDescription());
-	GraphEditor->GetCurrentGraph()->Modify();
 	const FGraphPanelSelectionSet SelectedNodes = GraphEditor->GetSelectedNodes();
 	GraphEditor->ClearSelectionSet();
-	for (UObject* Object : SelectedNodes)
-	{
-		if (UEdGraphNode* Node = Cast<UEdGraphNode>(Object); Node && Node->CanUserDeleteNode())
-		{
-			Node->Modify();
-			Node->DestroyNode();
-		}
-	}
+	DeleteNodesFromGraph(GraphEditor->GetCurrentGraph(), SelectedNodes);
 }
 
 bool FHTToggleGraphEditor::CanDeleteNodes() const
@@ -361,22 +370,25 @@ bool FHTToggleGraphEditor::CanDeleteNodes() const
 	return false;
 }
 
-void FHTToggleGraphEditor::CopySelectedNodes()
+FString FHTToggleGraphEditor::ExportNodesToText(const FGraphPanelSelectionSet& Nodes)
 {
-	FGraphPanelSelectionSet SelectedNodes = GetSelectedNodes();
-	for (FGraphPanelSelectionSet::TIterator It(SelectedNodes); It; ++It)
+	FGraphPanelSelectionSet Exported;
+	for (UObject* Object : Nodes)
 	{
-		UEdGraphNode* Node = Cast<UEdGraphNode>(*It);
-		if (!Node || !Node->CanDuplicateNode())
+		if (UEdGraphNode* Node = Cast<UEdGraphNode>(Object); Node && Node->CanDuplicateNode())
 		{
-			It.RemoveCurrent();
-			continue;
+			Node->PrepareForCopying();
+			Exported.Add(Node);
 		}
-		Node->PrepareForCopying();
 	}
 	FString ExportedText;
-	FEdGraphUtilities::ExportNodesToText(SelectedNodes, ExportedText);
-	FPlatformApplicationMisc::ClipboardCopy(*ExportedText);
+	FEdGraphUtilities::ExportNodesToText(Exported, ExportedText);
+	return ExportedText;
+}
+
+void FHTToggleGraphEditor::CopySelectedNodes()
+{
+	FPlatformApplicationMisc::ClipboardCopy(*ExportNodesToText(GetSelectedNodes()));
 }
 
 bool FHTToggleGraphEditor::CanCopyNodes() const
@@ -402,22 +414,17 @@ bool FHTToggleGraphEditor::CanCutNodes() const
 	return CanCopyNodes() && CanDeleteNodes();
 }
 
-void FHTToggleGraphEditor::PasteNodes()
+TArray<UEdGraphNode*> FHTToggleGraphEditor::PasteNodesFromText(UEdGraph* Graph, const FString& Text, const FVector2f& Location)
 {
-	if (!GraphEditor.IsValid())
+	TArray<UEdGraphNode*> Result;
+	if (!Graph || !FEdGraphUtilities::CanImportNodesFromText(Graph, Text))
 	{
-		return;
+		return Result;
 	}
-	const FVector2f Location = GraphEditor->GetPasteLocation2f();
 	const FScopedTransaction Transaction(FGenericCommands::Get().Paste->GetDescription());
-	UEdGraph* Graph = GraphEditor->GetCurrentGraph();
 	Graph->Modify();
-	GraphEditor->ClearSelectionSet();
-
-	FString TextToImport;
-	FPlatformApplicationMisc::ClipboardPaste(TextToImport);
 	TSet<UEdGraphNode*> PastedNodes;
-	FEdGraphUtilities::ImportNodesFromText(Graph, TextToImport, PastedNodes);
+	FEdGraphUtilities::ImportNodesFromText(Graph, Text, PastedNodes);
 
 	FVector2f Average(0.0f, 0.0f);
 	for (const UEdGraphNode* Node : PastedNodes)
@@ -431,11 +438,19 @@ void FHTToggleGraphEditor::PasteNodes()
 	}
 	for (UEdGraphNode* Node : PastedNodes)
 	{
-		GraphEditor->SetNodeSelection(Node, true);
 		Node->NodePosX = FMath::RoundToInt(Node->NodePosX - Average.X + Location.X);
 		Node->NodePosY = FMath::RoundToInt(Node->NodePosY - Average.Y + Location.Y);
 		Node->SnapToGrid(16);
 		Node->CreateNewGuid();
+	}
+	// Links to nodes outside the clipboard are only cleared at the very end of the import, so
+	// rebuild the pins once more from the links that survived, then keep exactly one empty input.
+	for (UEdGraphNode* Node : PastedNodes)
+	{
+		if (UHTToggleGraphNode* ToggleNode = Cast<UHTToggleGraphNode>(Node))
+		{
+			ToggleNode->ReconstructNode();
+		}
 	}
 	for (UEdGraphNode* Node : PastedNodes)
 	{
@@ -444,8 +459,26 @@ void FHTToggleGraphEditor::PasteNodes()
 			ToggleNode->NormalizeDynamicInputs(true);
 		}
 	}
+	Graph->NotifyGraphChanged();
+	Graph->MarkPackageDirty();
+	Result = PastedNodes.Array();
+	return Result;
+}
+
+void FHTToggleGraphEditor::PasteNodes()
+{
+	if (!GraphEditor.IsValid())
+	{
+		return;
+	}
+	FString TextToImport;
+	FPlatformApplicationMisc::ClipboardPaste(TextToImport);
+	GraphEditor->ClearSelectionSet();
+	for (UEdGraphNode* Node : PasteNodesFromText(GraphEditor->GetCurrentGraph(), TextToImport, GraphEditor->GetPasteLocation2f()))
+	{
+		GraphEditor->SetNodeSelection(Node, true);
+	}
 	GraphEditor->NotifyGraphChanged();
-	Asset->MarkPackageDirty();
 }
 
 bool FHTToggleGraphEditor::CanPasteNodes() const

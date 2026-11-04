@@ -37,6 +37,16 @@ public:
 	// Runs the compiler and reports into the result tab; selects offending nodes on error.
 	void Compile();
 
+	// Clipboard paths shared by Copy, Cut, Paste and Duplicate (and the automation tests, which
+	// must not touch the system clipboard). Text uses the engine's node export format.
+	static FString ExportNodesToText(const FGraphPanelSelectionSet& Nodes);
+	// One undoable "Paste" transaction: imports the nodes into Graph centred on Location, gives
+	// them new GUIDs, rebuilds their pins from the links that survived the import and keeps one
+	// empty trailing input. Links to nodes that were not copied are dropped. Returns the new nodes.
+	static TArray<UEdGraphNode*> PasteNodesFromText(UEdGraph* Graph, const FString& Text, const FVector2f& Location);
+	// One undoable "Delete" transaction for every deletable node in Nodes.
+	static void DeleteNodesFromGraph(UEdGraph* Graph, const FGraphPanelSelectionSet& Nodes);
+
 private:
 	TSharedRef<SDockTab> SpawnGraphTab(const FSpawnTabArgs& Args);
 	TSharedRef<SDockTab> SpawnDetailsTab(const FSpawnTabArgs& Args);

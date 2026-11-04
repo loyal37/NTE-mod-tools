@@ -44,6 +44,12 @@ public:
 	// bRecord = false: silent fix-up while loading or opening the editor; does not dirty the asset.
 	bool NormalizeDynamicInputs(bool bRecord = true);
 
+	// Removes links that cannot be valid: null entries, trashed pins and pins of nodes that are not
+	// in this node's graph. Returns how many were removed.
+	int32 RemoveDeadLinks();
+	// True for properties whose edit changes the pins or the title (rebuilds the node).
+	static bool DoesPropertyRebuildNode(FName MemberName);
+
 	// Current English display name of one of this node's pins, derived from the pin name.
 	static FText MakePinDisplayName(const UEdGraphPin* Pin);
 	// Rewrites every pin's display name (graphs saved by v1.5.30 carry Chinese names). Links,

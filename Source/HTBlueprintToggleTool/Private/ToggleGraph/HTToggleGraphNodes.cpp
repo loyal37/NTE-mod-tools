@@ -264,36 +264,103 @@ void UHTToggleGraphNode::AutowireNewNode(UEdGraphPin* FromPin)
 	}
 }
 
+bool UHTToggleGraphNode::DoesPropertyRebuildNode(const FName MemberName)
+{
+	// Pins (option count, dynamic inputs) and the node title. Everything else only redraws.
+	static const FName Names[] = {
+		GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode, InputCount),
+		GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Switch, OptionCount),
+		GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Switch, Label),
+		GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Switch, VariableName),
+		GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Switch, KeyName),
+		GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Part, Label),
+		GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Part, MaterialIDs),
+		GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Group, Label),
+	};
+	for (const FName& Name : Names)
+	{
+		if (Name == MemberName)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 void UHTToggleGraphNode::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
-	// Titles and option pins depend on the edited properties.
-	ReconstructNode();
-	if (UEdGraph* Graph = GetGraph())
+	// The engine also calls this without a property: while importing pasted or duplicated text
+	// (links to nodes later in the clipboard are still null and the node is not in the graph
+	// yet), from PostEditUndo (the transaction already restored the pins) and while loading.
+	// Rebuilding then would move half-resolved links, so only real property edits rebuild.
+	const FProperty* Changed = PropertyChangedEvent.MemberProperty ? PropertyChangedEvent.MemberProperty : PropertyChangedEvent.Property;
+	UEdGraph* Graph = GetGraph();
+	if (!Changed || GIsTransacting || HasAnyFlags(RF_ClassDefaultObject | RF_NeedLoad | RF_NeedPostLoad) || !Graph || !Graph->Nodes.Contains(this))
 	{
-		Graph->NotifyGraphChanged();
+		return;
 	}
+	if (DoesPropertyRebuildNode(Changed->GetFName()))
+	{
+		ReconstructNode();
+	}
+	Graph->NotifyGraphChanged();
+}
+
+int32 UHTToggleGraphNode::RemoveDeadLinks()
+{
+	// Null entries (unresolved pasted links), trashed pins and pins of nodes that are not in this
+	// graph cannot be moved to a rebuilt pin; the engine asserts on the first null one. A live pin
+	// on the other end also forgets this pin, so nothing keeps pointing at a pin that is trashed
+	// next (a node breaks all its links when it is destroyed).
+	const UEdGraph* Graph = GetGraph();
+	int32 Removed = 0;
+	for (UEdGraphPin* Pin : Pins)
+	{
+		if (!Pin)
+		{
+			continue;
+		}
+		Removed += Pin->LinkedTo.RemoveAll([Graph, Pin](UEdGraphPin* Linked)
+		{
+			const UEdGraphNode* Owner = Linked ? Linked->GetOwningNodeUnchecked() : nullptr;
+			const bool bDead = !Linked || Linked->WasTrashed() || !IsValid(Owner) || (Graph && (Owner->GetGraph() != Graph || !Graph->Nodes.Contains(Owner)));
+			if (bDead && Linked && !Linked->WasTrashed())
+			{
+				Linked->LinkedTo.Remove(Pin);
+			}
+			return bDead;
+		});
+	}
+	return Removed;
 }
 
 void UHTToggleGraphNode::ReconstructNode()
 {
+	// A node that is not in its graph yet (text import in progress) is rebuilt by the paste
+	// afterwards, once every link is resolved.
+	const UEdGraph* Graph = GetGraph();
+	if (Graph && !Graph->Nodes.Contains(this))
+	{
+		return;
+	}
+	Modify();
+	RemoveDeadLinks();
+	Pins.Remove(nullptr);
+
 	// Record every linked node first so undo restores both ends of each link.
 	TSet<UEdGraphNode*> LinkedNodes;
 	for (UEdGraphPin* Pin : Pins)
 	{
-		for (UEdGraphPin* Linked : Pin ? Pin->LinkedTo : TArray<UEdGraphPin*>())
+		for (UEdGraphPin* Linked : Pin->LinkedTo)
 		{
-			if (Linked && Linked->GetOwningNode())
-			{
-				LinkedNodes.Add(Linked->GetOwningNode());
-			}
+			LinkedNodes.Add(Linked->GetOwningNode());
 		}
 	}
 	for (UEdGraphNode* Linked : LinkedNodes)
 	{
 		Linked->Modify();
 	}
-	Modify();
 
 	TArray<UEdGraphPin*> OldPins = Pins;
 	Pins.Reset();
@@ -319,9 +386,9 @@ void UHTToggleGraphNode::ReconstructNode()
 		}
 		OldPin->MarkAsGarbage();
 	}
-	if (UEdGraph* Graph = GetGraph())
+	if (UEdGraph* OwningGraph = GetGraph())
 	{
-		Graph->NotifyNodeChanged(this);
+		OwningGraph->NotifyNodeChanged(this);
 	}
 }
 
