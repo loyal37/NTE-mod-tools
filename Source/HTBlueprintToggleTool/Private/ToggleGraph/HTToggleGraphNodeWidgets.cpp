@@ -1,5 +1,6 @@
 #include "HTToggleGraphNodeWidgets.h"
 
+#include "AssetThumbnail.h"
 #include "Engine/SkeletalMesh.h"
 #include "Framework/Application/SlateApplication.h"
 #include "GraphEditorSettings.h"
@@ -11,6 +12,7 @@
 #include "SGraphPin.h"
 #include "SNodePanel.h"
 #include "Styling/AppStyle.h"
+#include "ThumbnailRendering/ThumbnailManager.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
@@ -322,7 +324,7 @@ TSharedRef<SWidget> SHTToggleGraphNode::MakeOptionLabelBox(UHTToggleGraphNode_Sw
 TSharedRef<SWidget> SHTToggleGraphNode::MakeAssetPicker(UClass* AllowedClass, TFunction<FString()> GetPath, TFunction<void(UObject*)> OnPick, const FText& Tooltip) const
 {
 	return SNew(SBox)
-		.MinDesiredWidth(170.0f)
+		.MinDesiredWidth(220.0f)
 		.ToolTipText(Tooltip)
 		[
 			SNew(SObjectPropertyEntryBox)
@@ -332,7 +334,122 @@ TSharedRef<SWidget> SHTToggleGraphNode::MakeAssetPicker(UClass* AllowedClass, TF
 			.AllowClear(true)
 			.DisplayUseSelected(true)
 			.DisplayBrowse(true)
-			.DisplayThumbnail(false)
+			.DisplayThumbnail(true)
+			.ThumbnailPool(UThumbnailManager::Get().GetSharedThumbnailPool())
+			.ThumbnailSizeOverride(FIntPoint(40, 40))
+		];
+}
+
+TSharedRef<SWidget> SHTToggleGraphNode::MakeMaterialPartButton() const
+{
+	return SNew(SComboButton)
+		.ContentPadding(FMargin(4.0f, 1.0f))
+		.ToolTipText(LOCTEXT("MaterialPartTooltip", "Pick a material of the preview mesh: a part with every slot that uses it is added and connected to the next free input. The slots are looked up again on compile."))
+		.OnGetMenuContent(this, &SHTToggleGraphNode::MakeMaterialPartMenu)
+		.ButtonContent()
+		[
+			SNew(STextBlock)
+			.Font(FieldFont())
+			.Text(LOCTEXT("MaterialPartButton", "Add part from material..."))
+		];
+}
+
+TSharedRef<SWidget> SHTToggleGraphNode::MakeMaterialPartMenu() const
+{
+	UHTToggleGraphNode_SwitchBase* Switch = Cast<UHTToggleGraphNode_SwitchBase>(GetToggleNode());
+	const UHTToggleGraph* Asset = Switch ? Switch->GetToggleGraphAsset() : nullptr;
+	USkeletalMesh* Mesh = Asset ? Asset->ResolvePreviewMesh() : nullptr;
+	if (!Switch || !Switch->AcceptsTargetParts() || !Mesh)
+	{
+		return SNew(SBox)
+			.Padding(8.0f)
+			.MaxDesiredWidth(320.0f)
+			[
+				SNew(STextBlock)
+				.AutoWrapText(true)
+				.Text(LOCTEXT("NoPreviewMeshAnalyze", "No preview mesh. Set the asset's Anim Blueprint (click empty graph space to show the asset details)."))
+			];
+	}
+	TWeakObjectPtr<UHTToggleGraphNode_SwitchBase> WeakSwitch = Switch;
+	const TSharedPtr<FAssetThumbnailPool> Pool = UThumbnailManager::Get().GetSharedThumbnailPool();
+	TSharedRef<SVerticalBox> Rows = SNew(SVerticalBox);
+	TArray<UMaterialInterface*> Seen;
+	for (const FSkeletalMaterial& MeshMaterial : Mesh->GetMaterials())
+	{
+		UMaterialInterface* Material = MeshMaterial.MaterialInterface;
+		if (!Material || Seen.Contains(Material))
+		{
+			continue;
+		}
+		Seen.Add(Material);
+		const TArray<int32> Slots = UHTToggleGraphNode_Part::FindSlotsUsingMaterial(Mesh, Material);
+		const bool bAdded = Switch->FindTargetPartWithMaterial(Material) != nullptr;
+		const FString SlotText = FString::Printf(TEXT("Slots %s%s"),
+			*FString::JoinBy(Slots, TEXT(", "), [](const int32 Slot) { return FString::FromInt(Slot); }),
+			bAdded ? TEXT("  (already connected)") : TEXT(""));
+		const TSharedRef<FAssetThumbnail> Thumbnail = MakeShared<FAssetThumbnail>(Material, 64, 64, Pool);
+		TWeakObjectPtr<UMaterialInterface> WeakMaterial = Material;
+		Rows->AddSlot()
+			.AutoHeight()
+			.Padding(FMargin(2.0f))
+			[
+				SNew(SButton)
+				.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+				.IsEnabled(!bAdded)
+				.OnClicked_Lambda([WeakSwitch, WeakMaterial]()
+				{
+					if (WeakSwitch.IsValid() && WeakMaterial.IsValid())
+					{
+						WeakSwitch->AddPartFromMaterial(WeakMaterial.Get());
+					}
+					FSlateApplication::Get().DismissAllMenus();
+					return FReply::Handled();
+				})
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.Padding(FMargin(0.0f, 0.0f, 8.0f, 0.0f))
+					[
+						SNew(SBox)
+						.WidthOverride(64.0f)
+						.HeightOverride(64.0f)
+						[
+							Thumbnail->MakeThumbnailWidget()
+						]
+					]
+					+ SHorizontalBox::Slot()
+					.FillWidth(1.0f)
+					.VAlign(VAlign_Center)
+					[
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						[
+							SNew(STextBlock)
+							.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+							.Text(FText::FromString(Material->GetName()))
+						]
+						+ SVerticalBox::Slot()
+						.AutoHeight()
+						[
+							SNew(STextBlock)
+							.Font(FieldFont())
+							.Text(FText::FromString(SlotText))
+						]
+					]
+				]
+			];
+	}
+	return SNew(SBox)
+		.MinDesiredWidth(360.0f)
+		.MaxDesiredHeight(560.0f)
+		[
+			SNew(SScrollBox)
+			+ SScrollBox::Slot()
+			[
+				Rows
+			]
 		];
 }
 
@@ -535,6 +652,12 @@ TSharedRef<SWidget> SHTToggleGraphNode_TextureSwitch::CreateFieldsArea()
 		.AutoHeight()
 		.Padding(FMargin(0.0f, 3.0f, 0.0f, 1.0f))
 		[
+			MakeMaterialPartButton()
+		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(FMargin(0.0f, 3.0f, 0.0f, 1.0f))
+		[
 			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot()
 			.FillWidth(1.0f)
@@ -657,6 +780,12 @@ TSharedRef<SWidget> SHTToggleGraphNode_MaterialSwitch::CreateFieldsArea()
 		.AutoHeight()
 		[
 			MakeSwitchHeader(Node)
+		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(FMargin(0.0f, 3.0f, 0.0f, 1.0f))
+		[
+			MakeMaterialPartButton()
 		];
 	for (int32 Option = 0; Node && Option < Node->OptionCount; ++Option)
 	{
@@ -728,151 +857,6 @@ UHTToggleGraphNode_Part* SHTToggleGraphNode_Part::GetPart() const
 	return Cast<UHTToggleGraphNode_Part>(GraphNode);
 }
 
-FText SHTToggleGraphNode_Part::GetSlotButtonText() const
-{
-	const UHTToggleGraphNode_Part* Part = GetPart();
-	const int32 Count = Part ? Part->GetEffectiveMaterialIDs().Num() : 0;
-	return Count == 0
-		? LOCTEXT("PickSlots", "Pick material slots...")
-		: FText::Format(LOCTEXT("PickedSlots", "{0} slot(s) selected"), FText::AsNumber(Count));
-}
-
-TSharedRef<SWidget> SHTToggleGraphNode_Part::MakeSlotMenu() const
-{
-	UHTToggleGraphNode_Part* Part = GetPart();
-	const UHTToggleGraph* Asset = Part ? Part->GetToggleGraphAsset() : nullptr;
-	USkeletalMesh* Mesh = Asset ? Asset->ResolvePreviewMesh() : nullptr;
-	if (!Mesh)
-	{
-		return SNew(SBox)
-			.Padding(8.0f)
-			.MaxDesiredWidth(320.0f)
-			[
-				SNew(STextBlock)
-				.AutoWrapText(true)
-				.Text(LOCTEXT("NoPreviewMesh", "No preview mesh. Set the asset's Anim Blueprint (click empty graph space to show the asset details), or type the Material IDs."))
-			];
-	}
-	TSharedRef<SVerticalBox> Rows = SNew(SVerticalBox);
-	TWeakObjectPtr<UHTToggleGraphNode_Part> WeakNode = Part;
-	const TArray<FSkeletalMaterial>& Materials = Mesh->GetMaterials();
-	for (int32 SlotIndex = 0; SlotIndex < Materials.Num(); ++SlotIndex)
-	{
-		const FSkeletalMaterial& Material = Materials[SlotIndex];
-		const FName SlotName = !Material.MaterialSlotName.IsNone() ? Material.MaterialSlotName : Material.ImportedMaterialSlotName;
-		const FString MaterialName = Material.MaterialInterface ? Material.MaterialInterface->GetName() : TEXT("None");
-		Rows->AddSlot()
-			.AutoHeight()
-			.Padding(FMargin(6.0f, 1.0f))
-			[
-				SNew(SCheckBox)
-				.IsChecked_Lambda([WeakNode, SlotIndex]()
-				{
-					return WeakNode.IsValid() && WeakNode->GetEffectiveMaterialIDs().Contains(SlotIndex) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
-				})
-				.OnCheckStateChanged_Lambda([WeakNode, SlotIndex](const ECheckBoxState State)
-				{
-					if (WeakNode.IsValid())
-					{
-						WeakNode->SetMaterialIDSelectedInline(SlotIndex, State == ECheckBoxState::Checked);
-					}
-				})
-				[
-					SNew(STextBlock)
-					.Font(FieldFont())
-					.Text(FText::FromString(FString::Printf(TEXT("%d  %s  (%s)"), SlotIndex, *SlotName.ToString(), *MaterialName)))
-				]
-			];
-	}
-	return SNew(SBox)
-		.MaxDesiredHeight(420.0f)
-		[
-			SNew(SScrollBox)
-			+ SScrollBox::Slot()
-			[
-				Rows
-			]
-		];
-}
-
-FText SHTToggleGraphNode_Part::GetMaterialButtonText() const
-{
-	const UHTToggleGraphNode_Part* Part = GetPart();
-	return Part && !Part->SourceMaterial.IsNull()
-		? FText::Format(LOCTEXT("ByMaterialPicked", "By material: {0}"), FText::FromString(Part->SourceMaterial.GetAssetName()))
-		: LOCTEXT("ByMaterialNone", "By material...");
-}
-
-TSharedRef<SWidget> SHTToggleGraphNode_Part::MakeMaterialMenu() const
-{
-	UHTToggleGraphNode_Part* Part = GetPart();
-	const UHTToggleGraph* Asset = Part ? Part->GetToggleGraphAsset() : nullptr;
-	USkeletalMesh* Mesh = Asset ? Asset->ResolvePreviewMesh() : nullptr;
-	if (!Mesh)
-	{
-		return SNew(SBox)
-			.Padding(8.0f)
-			.MaxDesiredWidth(320.0f)
-			[
-				SNew(STextBlock)
-				.AutoWrapText(true)
-				.Text(LOCTEXT("NoPreviewMeshMaterials", "No preview mesh. Set the asset's Anim Blueprint (click empty graph space to show the asset details)."))
-			];
-	}
-	TWeakObjectPtr<UHTToggleGraphNode_Part> WeakNode = Part;
-	TSharedRef<SVerticalBox> Rows = SNew(SVerticalBox);
-	auto AddRow = [&Rows](const FText& Text, TFunction<void()> OnPick)
-	{
-		Rows->AddSlot()
-			.AutoHeight()
-			[
-				SNew(SButton)
-				.ButtonStyle(FAppStyle::Get(), "SimpleButton")
-				.OnClicked_Lambda([OnPick]()
-				{
-					OnPick();
-					FSlateApplication::Get().DismissAllMenus();
-					return FReply::Handled();
-				})
-				[
-					SNew(STextBlock)
-					.Font(FieldFont())
-					.Text(Text)
-				]
-			];
-	};
-	AddRow(LOCTEXT("ManualSlots", "Manual (pick slots below)"), [WeakNode]() { if (WeakNode.IsValid()) { WeakNode->SetSourceMaterialInline(nullptr); } });
-	TArray<UMaterialInterface*> Seen;
-	for (const FSkeletalMaterial& Material : Mesh->GetMaterials())
-	{
-		UMaterialInterface* Interface = Material.MaterialInterface;
-		if (!Interface || Seen.Contains(Interface))
-		{
-			continue;
-		}
-		Seen.Add(Interface);
-		const TArray<int32> Slots = UHTToggleGraphNode_Part::FindSlotsUsingMaterial(Mesh, Interface);
-		const FString SlotText = FString::JoinBy(Slots, TEXT(", "), [](const int32 Slot) { return FString::FromInt(Slot); });
-		TWeakObjectPtr<UMaterialInterface> WeakMaterial = Interface;
-		AddRow(FText::FromString(FString::Printf(TEXT("%s  (slots %s)"), *Interface->GetName(), *SlotText)), [WeakNode, WeakMaterial]()
-		{
-			if (WeakNode.IsValid() && WeakMaterial.IsValid())
-			{
-				WeakNode->SetSourceMaterialInline(WeakMaterial.Get());
-			}
-		});
-	}
-	return SNew(SBox)
-		.MaxDesiredHeight(420.0f)
-		[
-			SNew(SScrollBox)
-			+ SScrollBox::Slot()
-			[
-				Rows
-			]
-		];
-}
-
 TSharedRef<SWidget> SHTToggleGraphNode_Part::CreateFieldsArea()
 {
 	TWeakObjectPtr<UHTToggleGraphNode_Part> WeakNode = GetPart();
@@ -902,37 +886,24 @@ TSharedRef<SWidget> SHTToggleGraphNode_Part::CreateFieldsArea()
 					{
 						WeakNode->SetMaterialIDsInline(IDs);
 					}
-				})
-		]
-		+ SVerticalBox::Slot()
-		.AutoHeight()
-		.Padding(FMargin(0.0f, 3.0f, 0.0f, 1.0f))
-		[
-			SNew(SComboButton)
-			.ContentPadding(FMargin(4.0f, 1.0f))
-			.ToolTipText(LOCTEXT("ByMaterialTooltip", "Pick a material: every preview mesh slot that uses it joins the part, and the slots are looked up again on compile. A Texture Switch target uses this material."))
-			.OnGetMenuContent(this, &SHTToggleGraphNode_Part::MakeMaterialMenu)
-			.ButtonContent()
-			[
-				SNew(STextBlock)
-				.Font(FieldFont())
-				.Text(this, &SHTToggleGraphNode_Part::GetMaterialButtonText)
-			]
+				},
+				LOCTEXT("MaterialIDsTooltip", "Material slot indices. Typing IDs by hand stops following the material the part was made from."))
 		]
 		+ SVerticalBox::Slot()
 		.AutoHeight()
 		.Padding(FMargin(0.0f, 2.0f, 0.0f, 1.0f))
 		[
-			SNew(SComboButton)
-			.ContentPadding(FMargin(4.0f, 1.0f))
-			.ToolTipText(LOCTEXT("SlotsTooltip", "Tick the preview mesh material slots this part shows and hides."))
-			.OnGetMenuContent(this, &SHTToggleGraphNode_Part::MakeSlotMenu)
-			.ButtonContent()
-			[
-				SNew(STextBlock)
-				.Font(FieldFont())
-				.Text(this, &SHTToggleGraphNode_Part::GetSlotButtonText)
-			]
+			SNew(STextBlock)
+			.Font(FieldFont())
+			.ColorAndOpacity(FLinearColor(1.0f, 1.0f, 1.0f, 0.78f))
+			.Visibility_Lambda([WeakNode]() { return WeakNode.IsValid() && !WeakNode->SourceMaterial.IsNull() ? EVisibility::Visible : EVisibility::Collapsed; })
+			.Text_Lambda([WeakNode]()
+			{
+				return WeakNode.IsValid()
+					? FText::Format(LOCTEXT("FromMaterial", "From material {0}"), FText::FromString(WeakNode->SourceMaterial.GetAssetName()))
+					: FText::GetEmpty();
+			})
+			.ToolTipText(LOCTEXT("FromMaterialTooltip", "The slots are looked up on the preview mesh again on compile."))
 		];
 }
 

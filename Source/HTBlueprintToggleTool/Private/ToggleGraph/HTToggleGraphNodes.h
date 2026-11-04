@@ -201,6 +201,16 @@ public:
 	bool SetInitialOptionInline(int32 NewInitialOption);
 	bool SetOptionLabelInline(int32 Option, const FString& NewLabel);
 
+	// Texture and Material Switches take parts on their dynamic inputs.
+	virtual bool AcceptsTargetParts() const { return false; }
+	// The connected part that was made from Material, if any.
+	UHTToggleGraphNode_Part* FindTargetPartWithMaterial(const UMaterialInterface* Material) const;
+	// "Add part from material": one undoable step that places a part holding every preview mesh
+	// slot that uses Material (remembered, so compile looks the slots up again) and connects it
+	// to the first free input. Returns the part already connected for Material instead of adding
+	// a second one, and nullptr when the preview mesh does not use Material.
+	UHTToggleGraphNode_Part* AddPartFromMaterial(UMaterialInterface* Material);
+
 	virtual FString GetLabel() const override { return Label; }
 	virtual FString GetDisplayLabel() const override;
 	virtual bool CanCollapse() const override { return true; }
@@ -267,6 +277,7 @@ public:
 	TArray<UMaterialInterface*> GetTargetMaterials(int32 Target) const;
 
 	virtual bool HasDynamicInputs() const override { return true; }
+	virtual bool AcceptsTargetParts() const override { return true; }
 	virtual FString GetCollapsedSummary() const override;
 	virtual void AllocateDefaultPins() override;
 	virtual FLinearColor GetNodeTitleColor() const override;
@@ -293,6 +304,7 @@ public:
 	bool SetOptionMaterialInline(int32 Option, UMaterialInterface* Material);
 
 	virtual bool HasDynamicInputs() const override { return true; }
+	virtual bool AcceptsTargetParts() const override { return true; }
 	virtual void AllocateDefaultPins() override;
 	virtual FLinearColor GetNodeTitleColor() const override;
 

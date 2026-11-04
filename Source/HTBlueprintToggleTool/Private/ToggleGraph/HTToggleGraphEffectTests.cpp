@@ -41,6 +41,8 @@
 #include "SGraphPanel.h"
 #include "Slate/WidgetRenderer.h"
 #include "TextureResource.h"
+#include "ThumbnailRendering/ThumbnailManager.h"
+#include "AssetThumbnail.h"
 #include "UObject/Package.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UnrealType.h"
@@ -434,6 +436,73 @@ bool FHTToggleGraphEffectNodesTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("Texture switch textures survive"), CopyTexture->GetTargetTexture(1, 2).Get() == Fixture.Textures[2]);
 			TestTrue(TEXT("Material switch materials survive"), CopyMaterial->GetOptionMaterial(1).Get() == Fixture.M3);
 			TestEqual(TEXT("Duplicated target pin name"), CopyTexture->GetDynamicInputPin(1)->PinFriendlyName.ToString(), FString(TEXT("Target 2")));
+		}
+	}
+
+	// Add part from material: a part with every slot of the material, connected to the next input.
+	{
+		UHTToggleGraphNode_TextureSwitch* Fresh = Spawn<UHTToggleGraphNode_TextureSwitch>(Graph, 1600, 0);
+		UHTToggleGraphNode_MaterialSwitch* FreshMaterial = Spawn<UHTToggleGraphNode_MaterialSwitch>(Graph, 1600, 900);
+		const int32 Before = Graph->Nodes.Num();
+		UHTToggleGraphNode_Part* Added = Fresh->AddPartFromMaterial(Fixture.M1);
+		if (TestNotNull(TEXT("A part is made from the material"), Added))
+		{
+			TestTrue(TEXT("The part is in the graph"), Graph->Nodes.Contains(Added));
+			TestTrue(TEXT("It holds every slot of the material"), Added->MaterialIDs == Fixture.Slots1);
+			TestTrue(TEXT("It remembers the material"), Added->SourceMaterial.Get() == Fixture.M1);
+			TestEqual(TEXT("Its comment names the material"), Added->Label, Fixture.M1->GetName());
+			TestTrue(TEXT("It is connected to Target 1"), Fresh->GetTargetPart(0) == Added);
+			TestEqual(TEXT("A new empty Target follows"), CountInputPins(Fresh), 2);
+			TestTrue(TEXT("It sits left of the switch"), Added->NodePosX < Fresh->NodePosX);
+		}
+		TestTrue(TEXT("The same material is not added twice"), Fresh->AddPartFromMaterial(Fixture.M1) == Added && Graph->Nodes.Num() == Before + 1);
+		UHTToggleGraphNode_Part* Second = Fresh->AddPartFromMaterial(Fixture.M2);
+		TestTrue(TEXT("Another material goes to Target 2"), Second && Fresh->GetTargetPart(1) == Second && Second->MaterialIDs == Fixture.Slots2);
+		TestTrue(TEXT("Undo the second part"), GEditor->UndoTransaction());
+		TestFalse(TEXT("Undo removes the part"), Graph->Nodes.Contains(Second));
+		TestTrue(TEXT("Target 2 is free again"), Fresh->GetTargetPart(1) == nullptr && Fresh->GetTargetPart(0) == Added);
+		TestTrue(TEXT("Redo the second part"), GEditor->RedoTransaction());
+		TestTrue(TEXT("Redo connects it again"), Fresh->GetTargetPart(1) == Second);
+		UHTToggleGraphNode_Part* SlotsPart = FreshMaterial->AddPartFromMaterial(Fixture.M3);
+		TestTrue(TEXT("Material switches take parts from materials too"), SlotsPart && FreshMaterial->GetSlotsPart(0) == SlotsPart);
+		TestNull(TEXT("A material the mesh does not use adds nothing"), Fresh->AddPartFromMaterial(nullptr));
+		TestNull(TEXT("Visibility switches do not take target parts"), Show->AddPartFromMaterial(Fixture.M1));
+		CheckLinks(*this, TEXT("After adding parts from materials"), Graph);
+
+		// The menu lists the mesh materials with thumbnails; render it for review.
+		TSharedPtr<SHTToggleGraphNode> Widget = StaticCastSharedPtr<SHTToggleGraphNode>(FNodeFactory::CreateNodeWidget(Fresh));
+		TestTrue(TEXT("Shared thumbnail pool"), UThumbnailManager::Get().GetSharedThumbnailPool().IsValid());
+		if (TestTrue(TEXT("Texture switch widget"), Widget.IsValid()) && FApp::CanEverRender())
+		{
+			TSharedRef<SWidget> Menu = Widget->MakeMaterialPartMenu();
+			const FVector2D DrawSize(520.0, 900.0);
+			FWidgetRenderer* Renderer = new FWidgetRenderer(true, true);
+			UTextureRenderTarget2D* Target = FWidgetRenderer::CreateTargetFor(DrawSize, TF_Bilinear, true);
+			if (Target)
+			{
+				Target->AddToRoot();
+				const TSharedPtr<FAssetThumbnailPool> Pool = UThumbnailManager::Get().GetSharedThumbnailPool();
+				for (int32 Pass = 0; Pass < 30; ++Pass)
+				{
+					Pool->Tick(0.1f);
+					Renderer->DrawWidget(Target, Menu, DrawSize, 0.1f, false);
+					FlushRenderingCommands();
+				}
+				TArray<FColor> Pixels;
+				FTextureRenderTargetResource* Resource = Target->GameThread_GetRenderTargetResource();
+				if (Resource && Resource->ReadPixels(Pixels) && Pixels.Num() == static_cast<int32>(DrawSize.X * DrawSize.Y))
+				{
+					for (FColor& Pixel : Pixels)
+					{
+						Pixel.A = 255;
+					}
+					const FString Path = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("HTToggleGraphMaterialMenu.png"));
+					FImageUtils::SaveImageByExtension(*Path, FImageView(Pixels.GetData(), static_cast<int32>(DrawSize.X), static_cast<int32>(DrawSize.Y)));
+					AddInfo(FString::Printf(TEXT("Material menu screenshot: %s"), *FPaths::ConvertRelativePathToFull(Path)));
+				}
+				Target->RemoveFromRoot();
+			}
+			BeginCleanup(Renderer);
 		}
 	}
 

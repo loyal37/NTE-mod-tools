@@ -6,6 +6,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/Texture.h"
 #include "HTToggleGraph.h"
+#include "HTToggleGraphSchema.h"
 #include "Materials/MaterialInterface.h"
 #include "MaterialTypes.h"
 #include "Misc/ScopeExit.h"
@@ -722,6 +723,58 @@ FString UHTToggleGraphNode_SwitchBase::GetCollapsedSummary() const
 	const FString Key = KeyName.TrimStartAndEnd();
 	const FString KeyText = Key.IsEmpty() ? FString(TEXT("No key")) : FString::Printf(TEXT("Key %s"), *Key);
 	return FString::Printf(TEXT("%s \u00B7 %d options"), *KeyText, OptionCount);
+}
+
+UHTToggleGraphNode_Part* UHTToggleGraphNode_SwitchBase::FindTargetPartWithMaterial(const UMaterialInterface* Material) const
+{
+	for (int32 Input = 0; Material && AcceptsTargetParts() && Input < InputCount; ++Input)
+	{
+		UHTToggleGraphNode_Part* Part = GetLinkedPart(GetDynamicInputPin(Input));
+		if (Part && Part->SourceMaterial.Get() == Material)
+		{
+			return Part;
+		}
+	}
+	return nullptr;
+}
+
+UHTToggleGraphNode_Part* UHTToggleGraphNode_SwitchBase::AddPartFromMaterial(UMaterialInterface* Material)
+{
+	UEdGraph* Graph = GetGraph();
+	const UHTToggleGraph* Asset = GetToggleGraphAsset();
+	if (!AcceptsTargetParts() || !Graph || !Material)
+	{
+		return nullptr;
+	}
+	if (UHTToggleGraphNode_Part* Existing = FindTargetPartWithMaterial(Material))
+	{
+		return Existing;
+	}
+	TArray<int32> Slots = UHTToggleGraphNode_Part::FindSlotsUsingMaterial(Asset ? Asset->ResolvePreviewMesh() : nullptr, Material);
+	int32 FreeInput = INDEX_NONE;
+	for (int32 Input = 0; Input < InputCount && FreeInput == INDEX_NONE; ++Input)
+	{
+		const UEdGraphPin* Pin = GetDynamicInputPin(Input);
+		FreeInput = Pin && Pin->LinkedTo.IsEmpty() ? Input : INDEX_NONE;
+	}
+	if (Slots.IsEmpty() || FreeInput == INDEX_NONE)
+	{
+		return nullptr;
+	}
+	const FScopedTransaction Transaction(LOCTEXT("AddPartFromMaterial", "Add Part From Material"));
+	Modify();
+	const FVector2f Location(NodePosX - 560.0f, NodePosY + 140.0f + FreeInput * 150.0f);
+	UHTToggleGraphNode_Part* Part = Cast<UHTToggleGraphNode_Part>(FHTToggleGraphSchemaAction_NewNode::SpawnNode(Graph, UHTToggleGraphNode_Part::StaticClass(), Location, nullptr, false));
+	if (!Part)
+	{
+		return nullptr;
+	}
+	Part->Label = Material->GetName();
+	Part->SourceMaterial = Material;
+	Part->MaterialIDs = MoveTemp(Slots);
+	Graph->GetSchema()->TryCreateConnection(Part->GetOutputPin(), GetDynamicInputPin(FreeInput));
+	Graph->NotifyGraphChanged();
+	return Part;
 }
 
 bool UHTToggleGraphNode_SwitchBase::SetVariableNameInline(const FString& NewVariableName)

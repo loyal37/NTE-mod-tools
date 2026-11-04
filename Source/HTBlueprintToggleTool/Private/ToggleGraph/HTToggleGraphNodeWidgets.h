@@ -37,6 +37,9 @@ public:
 	int32 GetInputPinWidgetCount() const { return InputPins.Num(); }
 	int32 GetOutputPinWidgetCount() const { return OutputPins.Num(); }
 	bool IsShowingFields() const { return bShowingFields; }
+	// "Add part from material": the preview mesh materials with thumbnails and their slots
+	// (Texture and Material Switches; public for automation).
+	TSharedRef<SWidget> MakeMaterialPartMenu() const;
 
 protected:
 	virtual TSharedRef<SWidget> CreateFieldsArea() { return SNullWidget::NullWidget; }
@@ -54,8 +57,10 @@ protected:
 	TSharedRef<SWidget> MakeSwitchHeader(UHTToggleGraphNode_SwitchBase* Node) const;
 	// Small text box for one option's panel label.
 	TSharedRef<SWidget> MakeOptionLabelBox(UHTToggleGraphNode_SwitchBase* Node, int32 Option) const;
-	// Asset picker (texture or material) that commits through OnPick; nullptr clears.
+	// Asset picker (texture or material) with a thumbnail, committing through OnPick; nullptr clears.
 	TSharedRef<SWidget> MakeAssetPicker(UClass* AllowedClass, TFunction<FString()> GetPath, TFunction<void(UObject*)> OnPick, const FText& Tooltip) const;
+	// Button that opens MakeMaterialPartMenu.
+	TSharedRef<SWidget> MakeMaterialPartButton() const;
 	// Index of Pin among the node's dynamic inputs, INDEX_NONE otherwise.
 	int32 GetDynamicInputIndex(const UEdGraphPin* Pin) const;
 	// "Part ...: slots 3, 4" for a Target / Slots input.
@@ -130,10 +135,6 @@ protected:
 
 private:
 	UHTToggleGraphNode_Part* GetPart() const;
-	TSharedRef<SWidget> MakeSlotMenu() const;
-	FText GetSlotButtonText() const;
-	TSharedRef<SWidget> MakeMaterialMenu() const;
-	FText GetMaterialButtonText() const;
 };
 
 class SHTToggleGraphNode_Group : public SHTToggleGraphNode

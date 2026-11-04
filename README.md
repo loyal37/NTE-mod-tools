@@ -90,7 +90,7 @@ v1.5.28 按用户要求恢复之前的倍率版实现（含 PNG 导出和单 Mip
 
 回退必须用相同 `Tuner Name` 重新生成 RGB 调节器，然后用 NTE Panel System v0.1.17 重新扫描、生成面板，并重新烘焙打包 AnimBP、BPI、WBP。倍率变量恢复为 `_Gain`，元数据不含 `Mode`；面板拒绝未回退的有模式字段调节器，避免两套算法混用。只换插件 DLL 不会修改已生成/打包的蓝图。
 
-### 嵌套切换（Toggle Tree，v1.5.29 生成器 / v1.5.30 图编辑器 / v1.5.31 节点内编辑 / v1.5.32 自动增减输入 / v1.5.33 显隐开关元数据 / v1.5.34 复制粘贴修复 / v1.5.35 面板行名用变量名 / v1.5.36 贴图切换与材质切换节点 / v1.5.37 放大与折叠）
+### 嵌套切换（Toggle Tree，v1.5.29 生成器 / v1.5.30 图编辑器 / v1.5.31 节点内编辑 / v1.5.32 自动增减输入 / v1.5.33 显隐开关元数据 / v1.5.34 复制粘贴修复 / v1.5.35 面板行名用变量名 / v1.5.36 贴图切换与材质切换节点 / v1.5.37 放大与折叠 / v1.5.38 按材质生成部件）
 
 LoyalTools 风格的嵌套切换：外层切换的每个选项下可以再挂切换，部件可见 = 路径上所有“变量 == 选项”条件的 AND。该功能独立于 `Material visibility` 等现有模式，不改变它们的生成逻辑、`5+6;8+10` 文本语法和面板扫描。从 v1.5.31 起，这个功能的节点和界面文字全部是英文。
 
@@ -99,9 +99,9 @@ LoyalTools 风格的嵌套切换：外层切换的每个选项下可以再挂切
 1. 在 `Settings` 里选好动画蓝图、SaveGame 蓝图和角色文件夹，点 `Slot Materials` 右侧的 `Open Blueprint`。插件会在动画蓝图旁边创建（或打开）`TG_<动画蓝图名>` 资产并打开图编辑器；点图的空白处，`Details` 面板显示资产属性：`Anim Blueprint`、`SaveGame Blueprint`、`Character Name`（存档槽后缀）、`Tree Name`（受管区域名）、`Save Blueprints After Compile`。
 2. 在图里右键添加节点：`Part`、`Switch`、`Texture Switch`、`Material Switch`、`Group`、`Generate`。参数直接在节点上改：
    - `Switch`：`Comment`、`Variable`、`Key` 文本框（`Comment` 只是图里的备注，不会显示在游戏里；游戏面板上这一行的标题是状态变量名）；`Option count` 和 `Initial option` 用 `+`/`-` 调整，增减选项时会同步增删底部的 `Option N` 输入插口，剩下插口上的连线保留；每个 `Option N` 插口右边的小文本框是该选项的标签（面板显示用，空选项显示为 `Hidden`）。
-   - `Part`：`Comment`、`Material IDs`（如 `1, 2, 12`）；`By material...` 下拉列出预览网格体上的材质，选一个就自动勾选所有使用这个材质的槽，并记住这个材质（编译时按当前网格体重新查找，网格体换了材质分配也跟着变）；下面的槽列表可以手动勾选，手动改了就回到手动模式。`Part` 的 `Out` 可以连多条线：一条可见性连线（切换选项、群组或 `Generate`），外加任意多条连到 `Texture Switch` 的 `Target` 和 `Material Switch` 的 `Slots`；把它拖到另一个可见性输入时只移动可见性那条线。
-   - `Texture Switch`：头部和 `Switch` 一样（`Comment`、`Variable`、`Key`、`Option count`、`Initial option`、每个选项的标签），外加 `Parameter`（右边的下拉列出所有目标材质都有的贴图参数，也可以手填，如 `BaseColor`）。左侧 `Target N` 输入只接 `Part`，一个输入一个部件，末尾自动保留一个空输入；每个 `Target` 行显示部件的槽号和材质，并给每个选项一个贴图选择器，空的选项保留材质自己的贴图。对应主面板原来 Texture 模式里的“材质组”。
-   - `Material Switch`：头部和 `Switch` 一样；每个选项一行：标签 + 材质选择器，空的选项恢复槽的原始材质（预览网格体上的材质）。左侧 `Slots N` 输入只接 `Part`，所有部件的槽取并集。
+   - `Part`：`Comment`、`Material IDs`（如 `1, 2, 12`，手填）；从材质生成的部件下面多一行 `From material <材质>`，编译时按当前网格体重新查找这个材质的槽（网格体换了材质分配也跟着变），手动改了 ID 就不再跟随材质。选中节点后 `Details` 面板里仍有预览网格体的槽列表可以勾选。`Part` 的 `Out` 可以连多条线：一条可见性连线（切换选项、群组或 `Generate`），外加任意多条连到 `Texture Switch` 的 `Target` 和 `Material Switch` 的 `Slots`；把它拖到另一个可见性输入时只移动可见性那条线。
+   - `Texture Switch`：头部和 `Switch` 一样（`Comment`、`Variable`、`Key`、`Option count`、`Initial option`、每个选项的标签），外加 `Add part from material...`（分析：列出预览网格体上的所有材质和缩略图、槽号，选一个就在节点左边生成一个包含所有使用该材质的槽的 `Part`，备注是材质名，并自动连到下一个空的 `Target`；已经连上的材质显示为灰色，不会重复添加；可以撤销）和 `Parameter`（右边的下拉列出所有目标材质都有的贴图参数，也可以手填，如 `BaseColor`）。左侧 `Target N` 输入只接 `Part`，一个输入一个部件，末尾自动保留一个空输入；每个 `Target` 行显示部件的槽号和材质，并给每个选项一个贴图选择器，空的选项保留材质自己的贴图。对应主面板原来 Texture 模式里的“材质组”。
+   - `Material Switch`：头部和 `Switch` 一样，也有 `Add part from material...`（生成的部件连到下一个空的 `Slots`）；每个选项一行：标签 + 材质选择器（贴图和材质选择器都显示缩略图），空的选项恢复槽的原始材质（预览网格体上的材质）。左侧 `Slots N` 输入只接 `Part`，所有部件的槽取并集。
    - `Texture Switch` 和 `Material Switch` 的 `Out` 连到 `Generate`、`Group` 或某个 `Switch` 的选项（挂在选项下时只在该选项生效，面板上随父条件置灰）；它们没有选项插口，下面不能再挂东西。它们和 `Switch` 一样按按键/变量名共用状态变量，不同种类之间也共用（选项数和初始选项必须一致）。
    - `Group`：`Comment`。输入插口自动增减：末尾始终保留一个空的 `In N`，连上最后一个输入就会多出一个新的空输入；断开后会收缩末尾多余的空输入，只留一个；中间断开的输入会保留，其余连线的顺序不变。
    - `Generate`：树的根，输入规则和 `Group` 相同。
