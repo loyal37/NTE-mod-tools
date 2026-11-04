@@ -37,8 +37,27 @@ UEdGraphNode* FHTToggleGraphSchemaAction_NewNode::PerformAction(UEdGraph* Parent
 	return SpawnNode(ParentGraph, NodeClass, Location, FromPin, bSelectNewNode);
 }
 
+UEdGraphNode* FHTToggleGraphSchemaAction_SetCollapsed::PerformAction(UEdGraph* ParentGraph, UEdGraphPin* FromPin, const FVector2f& Location, bool bSelectNewNode)
+{
+	UHTToggleGraphNode::SetAllCollapsedInline(ParentGraph, bCollapse);
+	return nullptr;
+}
+
 void UHTToggleGraphSchema::GetGraphContextActions(FGraphContextMenuBuilder& ContextMenuBuilder) const
 {
+	if (!ContextMenuBuilder.FromPin)
+	{
+		ContextMenuBuilder.AddAction(MakeShared<FHTToggleGraphSchemaAction_SetCollapsed>(
+			true,
+			LOCTEXT("ViewCategory", "View"),
+			LOCTEXT("CollapseAll", "Collapse all"),
+			LOCTEXT("CollapseAllTooltip", "Collapse every part and switch: only titles, summaries and pins stay visible.")));
+		ContextMenuBuilder.AddAction(MakeShared<FHTToggleGraphSchemaAction_SetCollapsed>(
+			false,
+			LOCTEXT("ViewCategory", "View"),
+			LOCTEXT("ExpandAll", "Expand all"),
+			LOCTEXT("ExpandAllTooltip", "Expand every part and switch.")));
+	}
 	ContextMenuBuilder.AddAction(MakeShared<FHTToggleGraphSchemaAction_NewNode>(
 		UHTToggleGraphNode_Part::StaticClass(),
 		LOCTEXT("AddPart", "Part"),

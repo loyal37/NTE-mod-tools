@@ -28,14 +28,22 @@ public:
 	//~ SGraphNode
 	virtual TSharedRef<SWidget> CreateNodeContentArea() override;
 	virtual void AddPin(const TSharedRef<SGraphPin>& PinToAdd) override;
+	// Title plus, on a collapsed node, its one-line summary.
+	virtual TSharedRef<SWidget> CreateTitleWidget(TSharedPtr<SNodeTitle> NodeTitle) override;
+	// Collapse / expand arrow on nodes with fields.
+	virtual TSharedRef<SWidget> CreateTitleRightWidget() override;
 
 	// Inspection hooks used by automation.
 	int32 GetInputPinWidgetCount() const { return InputPins.Num(); }
 	int32 GetOutputPinWidgetCount() const { return OutputPins.Num(); }
+	bool IsShowingFields() const { return bShowingFields; }
 
 protected:
 	virtual TSharedRef<SWidget> CreateFieldsArea() { return SNullWidget::NullWidget; }
 	virtual TSharedRef<SWidget> CreateInputPinExtra(UEdGraphPin* Pin) { return SNullWidget::NullWidget; }
+	// What stays beside an input pin while the node is collapsed (a switch shows its option label).
+	virtual TSharedRef<SWidget> CreateCollapsedPinExtra(UEdGraphPin* Pin) { return SNullWidget::NullWidget; }
+	bool IsNodeCollapsed() const;
 
 	UHTToggleGraphNode* GetToggleNode() const;
 	// "Label: [text box]" row. Commits only call OnCommit when the text changed.
@@ -54,6 +62,9 @@ protected:
 	static FText MakeConnectedPartText(const UHTToggleGraphNode_Part* Part);
 	static FText MakeInitialOptionText(const UHTToggleGraphNode_SwitchBase* Node);
 	static FSlateFontInfo FieldFont();
+
+private:
+	bool bShowingFields = false;
 };
 
 class SHTToggleGraphNode_Switch : public SHTToggleGraphNode
@@ -67,6 +78,7 @@ public:
 protected:
 	virtual TSharedRef<SWidget> CreateFieldsArea() override;
 	virtual TSharedRef<SWidget> CreateInputPinExtra(UEdGraphPin* Pin) override;
+	virtual TSharedRef<SWidget> CreateCollapsedPinExtra(UEdGraphPin* Pin) override;
 
 private:
 	UHTToggleGraphNode_Switch* GetSwitch() const;

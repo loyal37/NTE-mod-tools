@@ -28,6 +28,24 @@ struct FHTToggleGraphSchemaAction_NewNode : public FEdGraphSchemaAction
 	static UHTToggleGraphNode* SpawnNode(UEdGraph* ParentGraph, TSubclassOf<UHTToggleGraphNode> InNodeClass, const FVector2f& Location, UEdGraphPin* FromPin = nullptr, bool bSelectNewNode = true);
 };
 
+// Right-click action on empty graph space: collapse or expand every part and switch.
+USTRUCT()
+struct FHTToggleGraphSchemaAction_SetCollapsed : public FEdGraphSchemaAction
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool bCollapse = true;
+
+	FHTToggleGraphSchemaAction_SetCollapsed() : FEdGraphSchemaAction() {}
+	FHTToggleGraphSchemaAction_SetCollapsed(const bool bInCollapse, FText InCategory, FText InMenuDesc, FText InToolTip)
+		: FEdGraphSchemaAction(MoveTemp(InCategory), MoveTemp(InMenuDesc), MoveTemp(InToolTip), 0)
+		, bCollapse(bInCollapse)
+	{}
+
+	virtual UEdGraphNode* PerformAction(UEdGraph* ParentGraph, UEdGraphPin* FromPin, const FVector2f& Location, bool bSelectNewNode = true) override;
+};
+
 UCLASS()
 class UHTToggleGraphSchema : public UEdGraphSchema
 {

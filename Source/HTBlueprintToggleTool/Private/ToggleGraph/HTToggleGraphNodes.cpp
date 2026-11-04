@@ -10,6 +10,8 @@
 #include "MaterialTypes.h"
 #include "Misc/ScopeExit.h"
 #include "ScopedTransaction.h"
+#include "ToolMenu.h"
+#include "ToolMenuSection.h"
 
 #define LOCTEXT_NAMESPACE "HTToggleGraphNodes"
 
@@ -191,6 +193,83 @@ namespace HTToggleGraphNodes
 		}
 		return FText::Format(LOCTEXT("DynamicInput", "In {0}"), FText::AsNumber(Index + 1));
 	}
+}
+
+bool UHTToggleGraphNode::SetCollapsedInline(const bool bNewCollapsed)
+{
+	if (!CanCollapse() || bCollapsed == bNewCollapsed)
+	{
+		return false;
+	}
+	const FScopedTransaction Transaction(bNewCollapsed ? LOCTEXT("CollapseNode", "Collapse Toggle Node") : LOCTEXT("ExpandNode", "Expand Toggle Node"));
+	Modify();
+	bCollapsed = bNewCollapsed;
+	if (UEdGraph* Graph = GetGraph())
+	{
+		Graph->NotifyNodeChanged(this);
+	}
+	return true;
+}
+
+int32 UHTToggleGraphNode::SetAllCollapsedInline(UEdGraph* Graph, const bool bNewCollapsed)
+{
+	if (!Graph)
+	{
+		return 0;
+	}
+	TArray<UHTToggleGraphNode*> Changing;
+	for (UEdGraphNode* Node : Graph->Nodes)
+	{
+		UHTToggleGraphNode* ToggleNode = Cast<UHTToggleGraphNode>(Node);
+		if (ToggleNode && ToggleNode->CanCollapse() && ToggleNode->bCollapsed != bNewCollapsed)
+		{
+			Changing.Add(ToggleNode);
+		}
+	}
+	if (Changing.IsEmpty())
+	{
+		return 0;
+	}
+	const FScopedTransaction Transaction(bNewCollapsed ? LOCTEXT("CollapseAllNodes", "Collapse All Toggle Nodes") : LOCTEXT("ExpandAllNodes", "Expand All Toggle Nodes"));
+	for (UHTToggleGraphNode* Node : Changing)
+	{
+		Node->Modify();
+		Node->bCollapsed = bNewCollapsed;
+	}
+	Graph->NotifyGraphChanged();
+	return Changing.Num();
+}
+
+void UHTToggleGraphNode::GetNodeContextMenuActions(UToolMenu* Menu, UGraphNodeContextMenuContext* Context) const
+{
+	Super::GetNodeContextMenuActions(Menu, Context);
+	if (!Menu)
+	{
+		return;
+	}
+	TWeakObjectPtr<UHTToggleGraphNode> WeakNode = const_cast<UHTToggleGraphNode*>(this);
+	FToolMenuSection& Section = Menu->AddSection(TEXT("HTToggleGraphNodeView"), LOCTEXT("ViewSection", "View"));
+	if (CanCollapse())
+	{
+		Section.AddMenuEntry(
+			TEXT("HTToggleCollapseNode"),
+			IsCollapsed() ? LOCTEXT("ExpandMenu", "Expand") : LOCTEXT("CollapseMenu", "Collapse"),
+			IsCollapsed() ? LOCTEXT("ExpandMenuTooltip", "Show this node's fields again.") : LOCTEXT("CollapseMenuTooltip", "Show only the title, a summary and the pins."),
+			FSlateIcon(),
+			FUIAction(FExecuteAction::CreateLambda([WeakNode]() { if (WeakNode.IsValid()) { WeakNode->SetCollapsedInline(!WeakNode->IsCollapsed()); } })));
+	}
+	Section.AddMenuEntry(
+		TEXT("HTToggleCollapseAll"),
+		LOCTEXT("CollapseAllMenu", "Collapse all"),
+		LOCTEXT("CollapseAllMenuTooltip", "Collapse every part and switch of this graph."),
+		FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([WeakNode]() { if (WeakNode.IsValid()) { SetAllCollapsedInline(WeakNode->GetGraph(), true); } })));
+	Section.AddMenuEntry(
+		TEXT("HTToggleExpandAll"),
+		LOCTEXT("ExpandAllMenu", "Expand all"),
+		LOCTEXT("ExpandAllMenuTooltip", "Expand every part and switch of this graph."),
+		FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([WeakNode]() { if (WeakNode.IsValid()) { SetAllCollapsedInline(WeakNode->GetGraph(), false); } })));
 }
 
 UHTToggleGraphNode_Part* UHTToggleGraphNode::GetLinkedPart(const UEdGraphPin* Pin)
@@ -458,6 +537,13 @@ FString UHTToggleGraphNode_Part::GetDisplayLabel() const
 	return IDs.IsEmpty() ? FString::Printf(TEXT("Part %s"), *Trimmed) : FString::Printf(TEXT("Part %s (%s)"), *Trimmed, *IDs);
 }
 
+FString UHTToggleGraphNode_Part::GetCollapsedSummary() const
+{
+	const FString IDs = FString::JoinBy(GetEffectiveMaterialIDs(), TEXT(", "), [](const int32 ID) { return FString::FromInt(ID); });
+	const FString Summary = IDs.IsEmpty() ? FString(TEXT("No IDs")) : FString::Printf(TEXT("IDs %s"), *IDs);
+	return SourceMaterial.IsNull() ? Summary : FString::Printf(TEXT("%s \u00B7 %s"), *Summary, *SourceMaterial.GetAssetName());
+}
+
 void UHTToggleGraphNode_Part::AllocateDefaultPins()
 {
 	UEdGraphPin* Out = CreatePin(EGPD_Output, PinCategory, OutputPinName);
@@ -629,6 +715,13 @@ FString UHTToggleGraphNode_SwitchBase::GetDisplayLabel() const
 		Title += FString::Printf(TEXT(" [%s]"), *Key);
 	}
 	return Title;
+}
+
+FString UHTToggleGraphNode_SwitchBase::GetCollapsedSummary() const
+{
+	const FString Key = KeyName.TrimStartAndEnd();
+	const FString KeyText = Key.IsEmpty() ? FString(TEXT("No key")) : FString::Printf(TEXT("Key %s"), *Key);
+	return FString::Printf(TEXT("%s \u00B7 %d options"), *KeyText, OptionCount);
 }
 
 bool UHTToggleGraphNode_SwitchBase::SetVariableNameInline(const FString& NewVariableName)
@@ -876,6 +969,12 @@ TArray<FName> UHTToggleGraphNode_TextureSwitch::GetCandidateParameters() const
 	}
 	Common.Sort(FNameLexicalLess());
 	return Common;
+}
+
+FString UHTToggleGraphNode_TextureSwitch::GetCollapsedSummary() const
+{
+	const FString Parameter = ParameterName.TrimStartAndEnd();
+	return FString::Printf(TEXT("%s \u00B7 %s"), *Super::GetCollapsedSummary(), Parameter.IsEmpty() ? TEXT("no parameter") : *Parameter);
 }
 
 void UHTToggleGraphNode_TextureSwitch::AllocateDefaultPins()

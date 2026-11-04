@@ -412,7 +412,7 @@ bool FHTToggleGraphNodeWidgetsTest::RunTest(const FString& Parameters)
 	}
 	FGraphContextMenuBuilder MenuBuilder(Graph);
 	Graph->GetSchema()->GetGraphContextActions(MenuBuilder);
-	TestEqual(TEXT("Right-click menu lists the six node types"), MenuBuilder.GetNumActions(), 6);
+	TestEqual(TEXT("Right-click menu lists the six node types plus Collapse all and Expand all"), MenuBuilder.GetNumActions(), 8);
 	for (int32 Index = 0; Index < MenuBuilder.GetNumActions(); ++Index)
 	{
 		const TSharedPtr<FEdGraphSchemaAction>& Action = MenuBuilder.GetSchemaAction(Index);

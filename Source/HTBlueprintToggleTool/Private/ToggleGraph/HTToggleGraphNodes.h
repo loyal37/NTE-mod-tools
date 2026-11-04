@@ -55,6 +55,16 @@ public:
 	// True for properties whose edit changes the pins or the title (rebuilds the node).
 	static bool DoesPropertyRebuildNode(FName MemberName);
 
+	// Collapsed nodes show only the title, a short summary and their pins (LoyalTools style).
+	virtual bool CanCollapse() const { return false; }
+	bool IsCollapsed() const { return bCollapsed && CanCollapse(); }
+	// One undoable step; the node widget is rebuilt and links keep their pins.
+	bool SetCollapsedInline(bool bNewCollapsed);
+	// One undoable step for every collapsible node of Graph. Returns how many nodes changed.
+	static int32 SetAllCollapsedInline(UEdGraph* Graph, bool bNewCollapsed);
+	// Line under the title of a collapsed node, for example "Key alt 6 · 2 options".
+	virtual FString GetCollapsedSummary() const { return FString(); }
+
 	// The part connected to Pin (Texture Switch Target and Material Switch Slots inputs), if any.
 	static UHTToggleGraphNode_Part* GetLinkedPart(const UEdGraphPin* Pin);
 
@@ -78,6 +88,8 @@ public:
 	virtual void PinConnectionListChanged(UEdGraphPin* Pin) override;
 	virtual void NodeConnectionListChanged() override;
 	virtual void PostLoad() override;
+	// Collapse / Expand, Collapse all / Expand all.
+	virtual void GetNodeContextMenuActions(class UToolMenu* Menu, class UGraphNodeContextMenuContext* Context) const override;
 
 protected:
 	virtual FString* GetMutableLabel() { return nullptr; }
@@ -89,6 +101,10 @@ protected:
 	// Number of dynamic input pins (Group, Generate). Managed automatically, not user-editable.
 	UPROPERTY()
 	int32 InputCount = 1;
+
+	// Saved per node; copied by copy and paste.
+	UPROPERTY()
+	bool bCollapsed = false;
 
 private:
 	bool bNormalizingInputs = false;
@@ -130,6 +146,8 @@ public:
 
 	virtual FString GetLabel() const override { return Label; }
 	virtual FString GetDisplayLabel() const override;
+	virtual bool CanCollapse() const override { return true; }
+	virtual FString GetCollapsedSummary() const override;
 	virtual void AllocateDefaultPins() override;
 	virtual FLinearColor GetNodeTitleColor() const override;
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
@@ -185,6 +203,8 @@ public:
 
 	virtual FString GetLabel() const override { return Label; }
 	virtual FString GetDisplayLabel() const override;
+	virtual bool CanCollapse() const override { return true; }
+	virtual FString GetCollapsedSummary() const override;
 
 protected:
 	virtual FString* GetMutableLabel() override { return &Label; }
@@ -247,6 +267,7 @@ public:
 	TArray<UMaterialInterface*> GetTargetMaterials(int32 Target) const;
 
 	virtual bool HasDynamicInputs() const override { return true; }
+	virtual FString GetCollapsedSummary() const override;
 	virtual void AllocateDefaultPins() override;
 	virtual FLinearColor GetNodeTitleColor() const override;
 

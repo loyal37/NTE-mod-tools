@@ -2,10 +2,36 @@
 
 #include "CoreMinimal.h"
 #include "GraphEditor.h"
+#include "SNodePanel.h"
 #include "EditorUndoClient.h"
 #include "Toolkits/AssetEditorToolkit.h"
 
 class IDetailsView;
+
+// Zoom steps of the toggle graph editor: the engine's steps up to 1:1 (still the default), then
+// more steps up to 4x, reachable with the plain mouse wheel (no Ctrl needed past 1:1).
+struct FHTToggleGraphZoomLevels : public FZoomLevelsContainer
+{
+	FHTToggleGraphZoomLevels();
+	virtual float GetZoomAmount(int32 InZoomLevel) const override;
+	virtual int32 GetNearestZoomLevel(float InZoomAmount) const override;
+	virtual FText GetZoomText(int32 InZoomLevel) const override;
+	virtual int32 GetNumZoomLevels() const override;
+	virtual int32 GetDefaultZoomLevel() const override;
+	virtual EGraphRenderingLOD::Type GetLOD(int32 InZoomLevel) const override;
+	virtual EGraphZoomLimitHandling GetZoomLimitHandling() const override { return EGraphZoomLimitHandling::AllowLimitBreak; }
+
+private:
+	struct FEntry
+	{
+		float Amount;
+		FText Text;
+		EGraphRenderingLOD::Type LOD;
+	};
+	TArray<FEntry> Entries;
+	int32 DefaultLevel = 0;
+};
+
 class STextBlock;
 class UHTToggleGraph;
 
@@ -46,6 +72,9 @@ public:
 	static TArray<UEdGraphNode*> PasteNodesFromText(UEdGraph* Graph, const FString& Text, const FVector2f& Location);
 	// One undoable "Delete" transaction for every deletable node in Nodes.
 	static void DeleteNodesFromGraph(UEdGraph* Graph, const FGraphPanelSelectionSet& Nodes);
+	// Installs FHTToggleGraphZoomLevels on a graph editor (done once per editor; the widget is
+	// reused when its tab is closed and opened again).
+	static void ApplyZoomLevels(SGraphEditor& Editor);
 
 private:
 	TSharedRef<SDockTab> SpawnGraphTab(const FSpawnTabArgs& Args);

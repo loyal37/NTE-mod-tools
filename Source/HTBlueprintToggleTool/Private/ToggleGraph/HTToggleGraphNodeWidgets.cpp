@@ -9,12 +9,14 @@
 #include "Materials/MaterialInterface.h"
 #include "PropertyCustomizationHelpers.h"
 #include "SGraphPin.h"
+#include "SNodePanel.h"
 #include "Styling/AppStyle.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SComboButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Images/SImage.h"
 #include "Widgets/Layout/SSeparator.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -44,6 +46,66 @@ UHTToggleGraphNode* SHTToggleGraphNode::GetToggleNode() const
 	return Cast<UHTToggleGraphNode>(GraphNode);
 }
 
+bool SHTToggleGraphNode::IsNodeCollapsed() const
+{
+	const UHTToggleGraphNode* Node = GetToggleNode();
+	return Node && Node->IsCollapsed();
+}
+
+TSharedRef<SWidget> SHTToggleGraphNode::CreateTitleWidget(TSharedPtr<SNodeTitle> NodeTitle)
+{
+	TSharedRef<SWidget> Title = SGraphNode::CreateTitleWidget(NodeTitle);
+	if (!IsNodeCollapsed())
+	{
+		return Title;
+	}
+	TWeakObjectPtr<UHTToggleGraphNode> WeakNode = GetToggleNode();
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		[
+			Title
+		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(FMargin(0.0f, 1.0f, 0.0f, 0.0f))
+		[
+			SNew(STextBlock)
+			.Font(FieldFont())
+			.ColorAndOpacity(FLinearColor(1.0f, 1.0f, 1.0f, 0.78f))
+			.Text_Lambda([WeakNode]() { return WeakNode.IsValid() ? FText::FromString(WeakNode->GetCollapsedSummary()) : FText::GetEmpty(); })
+		];
+}
+
+TSharedRef<SWidget> SHTToggleGraphNode::CreateTitleRightWidget()
+{
+	const UHTToggleGraphNode* Node = GetToggleNode();
+	if (!Node || !Node->CanCollapse())
+	{
+		return SNullWidget::NullWidget;
+	}
+	TWeakObjectPtr<UHTToggleGraphNode> WeakNode = GetToggleNode();
+	const bool bCollapsedNow = Node->IsCollapsed();
+	return SNew(SButton)
+		.ButtonStyle(FAppStyle::Get(), "NoBorder")
+		.ContentPadding(FMargin(4.0f, 2.0f))
+		.VAlign(VAlign_Center)
+		.ToolTipText(bCollapsedNow ? LOCTEXT("ExpandButtonTooltip", "Expand: show the fields again") : LOCTEXT("CollapseButtonTooltip", "Collapse: show only the title, a summary and the pins"))
+		.OnClicked_Lambda([WeakNode]()
+		{
+			if (WeakNode.IsValid())
+			{
+				WeakNode->SetCollapsedInline(!WeakNode->IsCollapsed());
+			}
+			return FReply::Handled();
+		})
+		[
+			SNew(SImage)
+			.Image(FAppStyle::GetBrush(bCollapsedNow ? "TreeArrow_Collapsed" : "TreeArrow_Expanded"))
+			.ColorAndOpacity(FSlateColor::UseForeground())
+		];
+}
+
 FSlateFontInfo SHTToggleGraphNode::FieldFont()
 {
 	return FCoreStyle::GetDefaultFontStyle("Regular", 9);
@@ -52,6 +114,7 @@ FSlateFontInfo SHTToggleGraphNode::FieldFont()
 TSharedRef<SWidget> SHTToggleGraphNode::CreateNodeContentArea()
 {
 	using namespace HTToggleGraphNodeWidgets;
+	bShowingFields = !IsNodeCollapsed();
 	return SNew(SBorder)
 		.BorderImage(FAppStyle::GetBrush("NoBorder"))
 		.HAlign(HAlign_Fill)
@@ -79,12 +142,12 @@ TSharedRef<SWidget> SHTToggleGraphNode::CreateNodeContentArea()
 						SAssignNew(RightNodeBox, SVerticalBox)
 					]
 				]
-				// Editable parameters.
+				// Editable parameters (hidden while collapsed; the pins stay).
 				+ SVerticalBox::Slot()
 				.AutoHeight()
-				.Padding(FMargin(8.0f, 2.0f, 8.0f, 4.0f))
+				.Padding(bShowingFields ? FMargin(8.0f, 2.0f, 8.0f, 4.0f) : FMargin(0.0f))
 				[
-					CreateFieldsArea()
+					bShowingFields ? CreateFieldsArea() : SNullWidget::NullWidget
 				]
 				// Input pins on the left.
 				+ SVerticalBox::Slot()
@@ -123,7 +186,7 @@ void SHTToggleGraphNode::AddPin(const TSharedRef<SGraphPin>& PinToAdd)
 			.VAlign(VAlign_Center)
 			.Padding(FMargin(6.0f, 0.0f, 8.0f, 0.0f))
 			[
-				CreateInputPinExtra(PinToAdd->GetPinObj())
+				IsNodeCollapsed() ? CreateCollapsedPinExtra(PinToAdd->GetPinObj()) : CreateInputPinExtra(PinToAdd->GetPinObj())
 			]
 		];
 	InputPins.Add(PinToAdd);
@@ -367,6 +430,21 @@ UHTToggleGraphNode_Switch* SHTToggleGraphNode_Switch::GetSwitch() const
 TSharedRef<SWidget> SHTToggleGraphNode_Switch::CreateFieldsArea()
 {
 	return MakeSwitchHeader(GetSwitch());
+}
+
+TSharedRef<SWidget> SHTToggleGraphNode_Switch::CreateCollapsedPinExtra(UEdGraphPin* Pin)
+{
+	UHTToggleGraphNode_Switch* Switch = GetSwitch();
+	const int32 Option = Switch ? Switch->GetOptionIndex(Pin) : INDEX_NONE;
+	const FString OptionLabel = Option == INDEX_NONE ? FString() : Switch->GetOptionLabel(Option).TrimStartAndEnd();
+	if (OptionLabel.IsEmpty())
+	{
+		return SNullWidget::NullWidget;
+	}
+	return SNew(STextBlock)
+		.Font(FieldFont())
+		.ColorAndOpacity(FLinearColor(1.0f, 1.0f, 1.0f, 0.78f))
+		.Text(FText::FromString(OptionLabel));
 }
 
 TSharedRef<SWidget> SHTToggleGraphNode_Switch::CreateInputPinExtra(UEdGraphPin* Pin)

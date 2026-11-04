@@ -13,6 +13,7 @@
 #include "IDetailsView.h"
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
+#include "SGraphPanel.h"
 #include "ScopedTransaction.h"
 #include "Styling/AppStyle.h"
 #include "Widgets/Docking/SDockTab.h"
@@ -26,6 +27,84 @@ const FName FHTToggleGraphEditor::GraphTabId(TEXT("HTToggleGraphEditor_Graph"));
 const FName FHTToggleGraphEditor::DetailsTabId(TEXT("HTToggleGraphEditor_Details"));
 const FName FHTToggleGraphEditor::ResultTabId(TEXT("HTToggleGraphEditor_Result"));
 const FName FHTToggleGraphEditor::AppIdentifier(TEXT("HTToggleGraphEditorApp"));
+
+FHTToggleGraphZoomLevels::FHTToggleGraphZoomLevels()
+{
+	auto Add = [this](const float Amount, const TCHAR* Text, const EGraphRenderingLOD::Type LOD)
+	{
+		Entries.Add({ Amount, FText::FromString(Text), LOD });
+	};
+	// Below 1:1: the engine's own steps.
+	Add(0.100f, TEXT("-12"), EGraphRenderingLOD::LowestDetail);
+	Add(0.125f, TEXT("-11"), EGraphRenderingLOD::LowestDetail);
+	Add(0.150f, TEXT("-10"), EGraphRenderingLOD::LowestDetail);
+	Add(0.175f, TEXT("-9"), EGraphRenderingLOD::LowestDetail);
+	Add(0.200f, TEXT("-8"), EGraphRenderingLOD::LowestDetail);
+	Add(0.225f, TEXT("-7"), EGraphRenderingLOD::LowDetail);
+	Add(0.250f, TEXT("-6"), EGraphRenderingLOD::LowDetail);
+	Add(0.375f, TEXT("-5"), EGraphRenderingLOD::MediumDetail);
+	Add(0.500f, TEXT("-4"), EGraphRenderingLOD::MediumDetail);
+	Add(0.675f, TEXT("-3"), EGraphRenderingLOD::MediumDetail);
+	Add(0.750f, TEXT("-2"), EGraphRenderingLOD::DefaultDetail);
+	Add(0.875f, TEXT("-1"), EGraphRenderingLOD::DefaultDetail);
+	DefaultLevel = Entries.Num();
+	Add(1.000f, TEXT("1:1"), EGraphRenderingLOD::DefaultDetail);
+	// Above 1:1: larger steps up to 4x.
+	Add(1.250f, TEXT("+1"), EGraphRenderingLOD::DefaultDetail);
+	Add(1.500f, TEXT("+2"), EGraphRenderingLOD::FullyZoomedIn);
+	Add(1.750f, TEXT("+3"), EGraphRenderingLOD::FullyZoomedIn);
+	Add(2.000f, TEXT("+4"), EGraphRenderingLOD::FullyZoomedIn);
+	Add(2.500f, TEXT("+5"), EGraphRenderingLOD::FullyZoomedIn);
+	Add(3.000f, TEXT("+6"), EGraphRenderingLOD::FullyZoomedIn);
+	Add(3.500f, TEXT("+7"), EGraphRenderingLOD::FullyZoomedIn);
+	Add(4.000f, TEXT("+8"), EGraphRenderingLOD::FullyZoomedIn);
+}
+
+float FHTToggleGraphZoomLevels::GetZoomAmount(const int32 InZoomLevel) const
+{
+	return Entries[FMath::Clamp(InZoomLevel, 0, Entries.Num() - 1)].Amount;
+}
+
+int32 FHTToggleGraphZoomLevels::GetNearestZoomLevel(const float InZoomAmount) const
+{
+	int32 Nearest = 0;
+	for (int32 Level = 1; Level < Entries.Num(); ++Level)
+	{
+		if (FMath::Abs(Entries[Level].Amount - InZoomAmount) < FMath::Abs(Entries[Nearest].Amount - InZoomAmount))
+		{
+			Nearest = Level;
+		}
+	}
+	return Nearest;
+}
+
+FText FHTToggleGraphZoomLevels::GetZoomText(const int32 InZoomLevel) const
+{
+	return Entries[FMath::Clamp(InZoomLevel, 0, Entries.Num() - 1)].Text;
+}
+
+int32 FHTToggleGraphZoomLevels::GetNumZoomLevels() const
+{
+	return Entries.Num();
+}
+
+int32 FHTToggleGraphZoomLevels::GetDefaultZoomLevel() const
+{
+	return DefaultLevel;
+}
+
+EGraphRenderingLOD::Type FHTToggleGraphZoomLevels::GetLOD(const int32 InZoomLevel) const
+{
+	return Entries[FMath::Clamp(InZoomLevel, 0, Entries.Num() - 1)].LOD;
+}
+
+void FHTToggleGraphEditor::ApplyZoomLevels(SGraphEditor& Editor)
+{
+	if (SGraphPanel* Panel = Editor.GetGraphPanel())
+	{
+		Panel->SetZoomLevelsContainer<FHTToggleGraphZoomLevels>();
+	}
+}
 
 FHTToggleGraphEditor::~FHTToggleGraphEditor()
 {
@@ -82,6 +161,7 @@ void FHTToggleGraphEditor::InitEditor(EToolkitMode::Type Mode, const TSharedPtr<
 		.GraphToEdit(Asset->Graph)
 		.GraphEvents(Events)
 		.AutoExpandActionMenu(true);
+	ApplyZoomLevels(*GraphEditor);
 
 	const TSharedRef<FTabManager::FLayout> Layout = FTabManager::NewLayout("HTToggleGraphEditor_Layout_v1")
 		->AddArea
