@@ -93,7 +93,7 @@ namespace HTToggleGenerator
 		UBlueprint* Blueprint = Cast<UBlueprint>(Object);
 		if (!Blueprint)
 		{
-			Result.Errors.Add(FString::Printf(TEXT("%s 加载失败: %s"), *Label, *Path));
+			Result.Errors.Add(FString::Printf(TEXT("%s could not be loaded: %s"), *Label, *Path));
 		}
 		return Blueprint;
 	}
@@ -222,6 +222,8 @@ namespace HTToggleGenerator
 			FKey Key;
 		};
 
+		// Besides the English names, full-width punctuation and Chinese key names are accepted, so
+		// keys typed with a Chinese input method still resolve.
 		const FKeyAlias Aliases[] = {
 			{ TEXT("="), EKeys::Equals },
 			{ TEXT("\uFF1D"), EKeys::Equals },
@@ -424,6 +426,7 @@ namespace HTToggleGenerator
 		KeyName.ReplaceInline(TEXT("\t"), TEXT(" "));
 		KeyName.ReplaceInline(TEXT("\r"), TEXT(" "));
 		KeyName.ReplaceInline(TEXT("\n"), TEXT(" "));
+		// Ideographic space and full-width plus from a Chinese input method.
 		KeyName.ReplaceInline(TEXT("\u3000"), TEXT(" "));
 		KeyName.ReplaceInline(TEXT("\uFF0B"), TEXT("+"));
 
@@ -543,7 +546,7 @@ namespace HTToggleGenerator
 
 		if (HasVariable(Blueprint, VariableName))
 		{
-			Result.Messages.Add(FString::Printf(TEXT("%s 已存在变量: %s"), *Label, *VariableName.ToString()));
+			Result.Messages.Add(FString::Printf(TEXT("%s variable already exists: %s"), *Label, *VariableName.ToString()));
 			return true;
 		}
 
@@ -552,11 +555,11 @@ namespace HTToggleGenerator
 
 		if (!FBlueprintEditorUtils::AddMemberVariable(Blueprint, VariableName, PinType, DefaultValue))
 		{
-			Result.Errors.Add(FString::Printf(TEXT("%s 添加变量失败: %s"), *Label, *VariableName.ToString()));
+			Result.Errors.Add(FString::Printf(TEXT("%s could not add variable: %s"), *Label, *VariableName.ToString()));
 			return false;
 		}
 
-		Result.Messages.Add(FString::Printf(TEXT("%s 已添加 int 变量: %s"), *Label, *VariableName.ToString()));
+		Result.Messages.Add(FString::Printf(TEXT("%s added int variable: %s"), *Label, *VariableName.ToString()));
 		return true;
 	}
 
@@ -709,7 +712,7 @@ namespace HTToggleGenerator
 	{
 		if (!A || !B)
 		{
-			Result.Errors.Add(FString::Printf(TEXT("连线失败，缺少 Pin: %s"), *Label));
+			Result.Errors.Add(FString::Printf(TEXT("Connection failed, missing pin: %s"), *Label));
 			return false;
 		}
 
@@ -720,7 +723,7 @@ namespace HTToggleGenerator
 
 		if (!GetSchema()->TryCreateConnection(A, B))
 		{
-			Result.Errors.Add(FString::Printf(TEXT("连线失败: %s (%s -> %s)"), *Label, *A->PinName.ToString(), *B->PinName.ToString()));
+			Result.Errors.Add(FString::Printf(TEXT("Connection failed: %s (%s -> %s)"), *Label, *A->PinName.ToString(), *B->PinName.ToString()));
 			return false;
 		}
 		return true;
@@ -902,7 +905,7 @@ namespace HTToggleGenerator
 		UFunction* Function = OwnerClass ? OwnerClass->FindFunctionByName(FunctionName) : nullptr;
 		if (!Function)
 		{
-			Result.Errors.Add(FString::Printf(TEXT("找不到函数: %s.%s"), OwnerClass ? *OwnerClass->GetName() : TEXT("None"), *FunctionName.ToString()));
+			Result.Errors.Add(FString::Printf(TEXT("Function not found: %s.%s"), OwnerClass ? *OwnerClass->GetName() : TEXT("None"), *FunctionName.ToString()));
 			return nullptr;
 		}
 
@@ -933,7 +936,7 @@ namespace HTToggleGenerator
 		UFunction* Function = UKismetMathLibrary::StaticClass()->FindFunctionByName(FunctionName);
 		if (!Function)
 		{
-			Result.Errors.Add(FString::Printf(TEXT("找不到函数: UKismetMathLibrary.%s"), *FunctionName.ToString()));
+			Result.Errors.Add(FString::Printf(TEXT("Function not found: UKismetMathLibrary.%s"), *FunctionName.ToString()));
 			return nullptr;
 		}
 
@@ -1062,7 +1065,7 @@ namespace HTToggleGenerator
 
 		if (EventNode)
 		{
-			Result.Messages.Add(FString::Printf(TEXT("已创建事件节点: %s"), *EventName.ToString()));
+			Result.Messages.Add(FString::Printf(TEXT("Created event node: %s"), *EventName.ToString()));
 		}
 		return EventNode;
 	}
@@ -1110,14 +1113,14 @@ namespace HTToggleGenerator
 		UK2Node_Event* EventNode = FindOrCreateAnimEvent(Graph, EventName, EventPosition, Result);
 		if (!EventNode)
 		{
-			Result.Errors.Add(FString::Printf(TEXT("无法创建或找到事件节点: %s"), *EventName.ToString()));
+			Result.Errors.Add(FString::Printf(TEXT("Could not create or find event node: %s"), *EventName.ToString()));
 			return nullptr;
 		}
 
 		UEdGraphPin* EventOutput = GetSchema()->FindExecutionPin(*EventNode, EGPD_Output);
 		if (!EventOutput)
 		{
-			Result.Errors.Add(FString::Printf(TEXT("事件没有执行输出: %s"), *EventName.ToString()));
+			Result.Errors.Add(FString::Printf(TEXT("Event has no execution output: %s"), *EventName.ToString()));
 			return nullptr;
 		}
 
@@ -1661,7 +1664,7 @@ namespace HTToggleGenerator
 		UEdGraph* Graph = FBlueprintEditorUtils::FindEventGraph(AnimBlueprint);
 		if (!Graph)
 		{
-			Result.Errors.Add(TEXT("动画蓝图没有 EventGraph"));
+			Result.Errors.Add(TEXT("The Animation Blueprint has no Event Graph."));
 			return;
 		}
 
@@ -1804,7 +1807,7 @@ namespace HTToggleGenerator
 		UEdGraph* Graph = FBlueprintEditorUtils::FindEventGraph(AnimBlueprint);
 		if (!Graph)
 		{
-			Result.Errors.Add(TEXT("动画蓝图没有 EventGraph"));
+			Result.Errors.Add(TEXT("The Animation Blueprint has no Event Graph."));
 			return;
 		}
 
@@ -3970,11 +3973,11 @@ FString FHTBlueprintToggleGeneratorResult::ToDisplayString() const
 	TArray<FString> Lines;
 	if (bSuccess)
 	{
-		Lines.Add(TEXT("生成完成"));
+		Lines.Add(TEXT("Generation finished"));
 	}
 	else
 	{
-		Lines.Add(TEXT("生成失败"));
+		Lines.Add(TEXT("Generation failed"));
 	}
 
 	for (const FString& Error : Errors)
@@ -4000,8 +4003,8 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 		return GenerateTextureChannelTuner(Params);
 	}
 
-	UBlueprint* AnimBlueprint = LoadBlueprint(Params.AnimBlueprintPath, Result, TEXT("动画蓝图"));
-	UBlueprint* SaveBlueprint = LoadBlueprint(Params.SaveGameBlueprintPath, Result, TEXT("SaveGame 蓝图"));
+	UBlueprint* AnimBlueprint = LoadBlueprint(Params.AnimBlueprintPath, Result, TEXT("Animation Blueprint"));
+	UBlueprint* SaveBlueprint = LoadBlueprint(Params.SaveGameBlueprintPath, Result, TEXT("SaveGame Blueprint"));
 	if (!AnimBlueprint || !SaveBlueprint)
 	{
 		return Result;
@@ -4229,13 +4232,13 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 	UClass* SaveClass = SaveBlueprint->GeneratedClass ? SaveBlueprint->GeneratedClass.Get() : SaveBlueprint->SkeletonGeneratedClass.Get();
 	if (!SaveClass)
 	{
-		Result.Errors.Add(TEXT("SaveGame 蓝图没有可用的 GeneratedClass"));
+		Result.Errors.Add(TEXT("The SaveGame Blueprint has no usable generated class."));
 		return Result;
 	}
 
 	if (!SaveClass->IsChildOf(USaveGame::StaticClass()))
 	{
-		Result.Messages.Add(FString::Printf(TEXT("提示: %s 不是 USaveGame 子类，节点仍会尝试生成。"), *SaveClass->GetName()));
+		Result.Messages.Add(FString::Printf(TEXT("Note: %s is not a USaveGame subclass; the nodes are still generated."), *SaveClass->GetName()));
 	}
 
 	UEdGraph* LayoutGraph = FBlueprintEditorUtils::FindEventGraph(AnimBlueprint);
@@ -4286,11 +4289,11 @@ FHTBlueprintToggleGeneratorResult FHTBlueprintToggleGenerator::Generate(const FH
 		FEditorFileUtils::PromptForCheckoutAndSave(Packages, false, false, &FailedPackages, true, false);
 		if (FailedPackages.Num() > 0)
 		{
-			Result.Errors.Add(TEXT("蓝图已生成，但保存资产失败，请在编辑器里手动保存。"));
+			Result.Errors.Add(TEXT("The Blueprints were generated, but the assets could not be saved. Save them manually in the editor."));
 		}
 		else
 		{
-			Result.Messages.Add(TEXT("资产已保存。"));
+			Result.Messages.Add(TEXT("Assets saved."));
 		}
 	}
 
@@ -4360,38 +4363,16 @@ FHTNestedToggleGeneratorResult FHTBlueprintToggleGenerator::GenerateNestedVisibi
 
 	// Graph-building helpers report plain messages; keep them in a legacy result and merge at the end.
 	FHTBlueprintToggleGeneratorResult Inner;
-	// The shared helpers predate this feature and report some messages in Chinese; the toggle
-	// tree UI is English, so translate those fragments here instead of changing the helpers.
-	auto ToEnglish = [](FString Text)
-	{
-		static const TCHAR* const Fragments[][2] = {
-			{ TEXT("\u8FDE\u7EBF\u5931\u8D25\uFF0C\u7F3A\u5C11 Pin: "), TEXT("Connection failed, missing pin: ") },
-			{ TEXT("\u8FDE\u7EBF\u5931\u8D25: "), TEXT("Connection failed: ") },
-			{ TEXT("\u627E\u4E0D\u5230\u51FD\u6570: "), TEXT("Function not found: ") },
-			{ TEXT(" \u52A0\u8F7D\u5931\u8D25: "), TEXT(" could not be loaded: ") },
-			{ TEXT(" \u5DF2\u6DFB\u52A0 int \u53D8\u91CF: "), TEXT(" added int variable: ") },
-			{ TEXT(" \u5DF2\u5B58\u5728\u53D8\u91CF: "), TEXT(" variable already exists: ") },
-			{ TEXT(" \u6DFB\u52A0\u53D8\u91CF\u5931\u8D25: "), TEXT(" could not add variable: ") },
-			{ TEXT("\u5DF2\u521B\u5EFA\u4E8B\u4EF6\u8282\u70B9: "), TEXT("Created event node: ") },
-			{ TEXT("\u65E0\u6CD5\u521B\u5EFA\u6216\u627E\u5230\u4E8B\u4EF6\u8282\u70B9: "), TEXT("Could not create or find event node: ") },
-			{ TEXT("\u4E8B\u4EF6\u6CA1\u6709\u6267\u884C\u8F93\u51FA: "), TEXT("Event has no execution output: ") },
-		};
-		for (const auto& Fragment : Fragments)
-		{
-			Text.ReplaceInline(Fragment[0], Fragment[1]);
-		}
-		return Text;
-	};
-	auto Finish = [&Result, &Inner, &ToEnglish]() -> FHTNestedToggleGeneratorResult&
+	auto Finish = [&Result, &Inner]() -> FHTNestedToggleGeneratorResult&
 	{
 		for (const FString& Error : Inner.Errors)
 		{
 			FHTNestedToggleIssue& Issue = Result.Errors.AddDefaulted_GetRef();
-			Issue.Message = ToEnglish(Error);
+			Issue.Message = Error;
 		}
 		for (const FString& Message : Inner.Messages)
 		{
-			Result.Messages.Add(ToEnglish(Message));
+			Result.Messages.Add(Message);
 		}
 		Result.bSuccess = Result.Errors.IsEmpty();
 		return Result;

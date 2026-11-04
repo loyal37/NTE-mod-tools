@@ -890,9 +890,10 @@ bool SHTMaterialSlotMapper::ParseSlotIds(const FString& RawValue, TArray<int32>&
 	FString Normalized = RawValue;
 	Normalized.TrimStartAndEndInline();
 	Normalized.ReplaceInline(TEXT(";"), TEXT(","));
-	Normalized.ReplaceInline(TEXT("；"), TEXT(","));
-	Normalized.ReplaceInline(TEXT("，"), TEXT(","));
-	Normalized.ReplaceInline(TEXT("、"), TEXT(","));
+	// Full-width semicolon, comma and enumeration comma from a Chinese input method.
+	Normalized.ReplaceInline(TEXT("\uFF1B"), TEXT(","));
+	Normalized.ReplaceInline(TEXT("\uFF0C"), TEXT(","));
+	Normalized.ReplaceInline(TEXT("\u3001"), TEXT(","));
 	Normalized.ReplaceInline(TEXT(" "), TEXT(","));
 	Normalized.ReplaceInline(TEXT("\r"), TEXT(","));
 	Normalized.ReplaceInline(TEXT("\n"), TEXT(","));
@@ -998,9 +999,10 @@ void SHTMaterialSlotMapper::RefreshAssignedSlotIds()
 		Mapping->SlotIds = Normalized;
 		Normalized.TrimStartAndEndInline();
 		Normalized.ReplaceInline(TEXT(";"), TEXT(","));
-		Normalized.ReplaceInline(TEXT("；"), TEXT(","));
-		Normalized.ReplaceInline(TEXT("，"), TEXT(","));
-		Normalized.ReplaceInline(TEXT("、"), TEXT(","));
+		// Full-width semicolon, comma and enumeration comma from a Chinese input method.
+		Normalized.ReplaceInline(TEXT("\uFF1B"), TEXT(","));
+		Normalized.ReplaceInline(TEXT("\uFF0C"), TEXT(","));
+		Normalized.ReplaceInline(TEXT("\u3001"), TEXT(","));
 		Normalized.ReplaceInline(TEXT(" "), TEXT(","));
 		Normalized.ReplaceInline(TEXT("\r"), TEXT(","));
 		Normalized.ReplaceInline(TEXT("\n"), TEXT(","));

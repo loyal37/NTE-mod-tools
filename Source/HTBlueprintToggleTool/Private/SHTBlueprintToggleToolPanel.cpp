@@ -2966,13 +2966,13 @@ FReply SHTBlueprintToggleToolPanel::OnGenerateClicked()
 	const FString KeyName = TextBoxString(KeyNameBox).TrimStartAndEnd();
 	if (ToggleVariableName.IsEmpty())
 	{
-		ShowPanelError(LOCTEXT("MissingAnimVariable", "请填写 Anim Variable。"));
+		ShowPanelError(LOCTEXT("MissingAnimVariable", "Fill in Anim Variable."));
 		return FReply::Handled();
 	}
 
 	if (KeyName.IsEmpty() && ToggleMode != EHTBlueprintToggleMode::TextureChannelTuner)
 	{
-		ShowPanelError(LOCTEXT("MissingKey", "请填写 Key。"));
+		ShowPanelError(LOCTEXT("MissingKey", "Fill in Key."));
 		return FReply::Handled();
 	}
 

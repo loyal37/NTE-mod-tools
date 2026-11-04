@@ -12,7 +12,8 @@ namespace HTMaterialVisibilityInput
 		OutGroups.Reset();
 		OutError.Reset();
 		FString Input = RawText.TrimStartAndEnd();
-		Input.ReplaceInline(TEXT("\uFF0B"), TEXT("+"));
+		// Full-width plus, comma, enumeration comma and semicolon from a Chinese input method.
+	Input.ReplaceInline(TEXT("\uFF0B"), TEXT("+"));
 		Input.ReplaceInline(TEXT("\uFF0C"), TEXT(","));
 		Input.ReplaceInline(TEXT("\u3001"), TEXT(","));
 		Input.ReplaceInline(TEXT("\uFF1B"), TEXT(";"));

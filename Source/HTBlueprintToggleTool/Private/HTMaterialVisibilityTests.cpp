@@ -49,25 +49,26 @@ bool FHTMaterialVisibilityInputTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Only a semicolon selects the group-only cycle"), HTMaterialVisibilityInput::IsGroupCycle(Text), bCycle);
 	};
 	CheckGroups(TEXT("5+6;8+10+12"), { { 5, 6 }, { 8, 10, 12 } }, true);
-	CheckGroups(TEXT(" 5 + 6 ； 8 + 10 + 12 "), { { 5, 6 }, { 8, 10, 12 } }, true);
+	// \uFF0B \uFF0C \uFF1B: full-width plus, comma and semicolon typed with a Chinese input method.
+	CheckGroups(TEXT(" 5 + 6 \uFF1B 8 + 10 + 12 "), { { 5, 6 }, { 8, 10, 12 } }, true);
 	CheckGroups(TEXT("5;8+10;12"), { { 5 }, { 8, 10 }, { 12 } }, true);
 	CheckGroups(TEXT("16"), { { 16 } }, false);
 	CheckGroups(TEXT("13+20"), { { 13, 20 } }, false);
 	CheckGroups(TEXT("13,20"), { { 13 }, { 20 } }, false);
-	CheckGroups(TEXT("13，20"), { { 13 }, { 20 } }, false);
+	CheckGroups(TEXT("13\uFF0C20"), { { 13 }, { 20 } }, false);
 	CheckGroups(TEXT("13 20"), { { 13 }, { 20 } }, false);
-	CheckGroups(TEXT("5＋6；8＋10＋12"), { { 5, 6 }, { 8, 10, 12 } }, true);
+	CheckGroups(TEXT("5\uFF0B6\uFF1B8\uFF0B10\uFF0B12"), { { 5, 6 }, { 8, 10, 12 } }, true);
 	CheckGroups(TEXT("1+2,3+4"), { { 1, 2 }, { 3, 4 } }, false);
 	CheckGroups(TEXT("0;2147483647"), { { 0 }, { MAX_int32 } }, true);
 
 	for (const FString& Text : {
 		FString(TEXT("")), FString(TEXT(" ")), FString(TEXT(";5")), FString(TEXT("5;")),
-		FString(TEXT("5;;8")), FString(TEXT("5；；8")), FString(TEXT("5;；8")),
+		FString(TEXT("5;;8")), FString(TEXT("5\uFF1B\uFF1B8")), FString(TEXT("5;\uFF1B8")),
 		FString(TEXT("5,,8")), FString(TEXT("5, ")), FString(TEXT("5+;8")),
 		FString(TEXT("+5;8")), FString(TEXT("5++6;8")), FString(TEXT("-1;8")),
 		FString(TEXT("5;cloth")), FString(TEXT("5;1.5")), FString(TEXT("5;2147483648")),
 		FString(TEXT("5;999999999999999999999999999")), FString(TEXT("5+5;8")),
-		FString(TEXT("5+6;6+8")), FString(TEXT("5+6;8,10")), FString(TEXT("5+6；8，10")) })
+		FString(TEXT("5+6;6+8")), FString(TEXT("5+6;8,10")), FString(TEXT("5+6\uFF1B8\uFF0C10")) })
 	{
 		TArray<FHTMaterialVisibilityGroup> Groups;
 		FString Error;
