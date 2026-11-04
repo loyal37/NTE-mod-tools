@@ -3,7 +3,11 @@
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraph/EdGraphSchema.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/Texture.h"
 #include "HTToggleGraph.h"
+#include "Materials/MaterialInterface.h"
+#include "MaterialTypes.h"
 #include "Misc/ScopeExit.h"
 #include "ScopedTransaction.h"
 
@@ -93,7 +97,7 @@ void UHTToggleGraphNode::AllocateDynamicInputPins()
 	for (int32 Index = 0; Index < InputCount; ++Index)
 	{
 		UEdGraphPin* In = CreatePin(EGPD_Input, PinCategory, DynamicInputPinName(Index));
-		In->PinFriendlyName = FText::Format(LOCTEXT("DynamicInput", "In {0}"), FText::AsNumber(Index + 1));
+		In->PinFriendlyName = MakePinDisplayName(In);
 	}
 }
 
@@ -135,7 +139,7 @@ bool UHTToggleGraphNode::NormalizeDynamicInputs(const bool bRecord)
 	for (int32 Index = Present; Index < Desired; ++Index)
 	{
 		UEdGraphPin* In = CreatePin(EGPD_Input, PinCategory, DynamicInputPinName(Index));
-		In->PinFriendlyName = FText::Format(LOCTEXT("DynamicInput", "In {0}"), FText::AsNumber(Index + 1));
+		In->PinFriendlyName = MakePinDisplayName(In);
 	}
 	for (int32 Index = Present - 1; Index >= Desired; --Index)
 	{
@@ -170,8 +174,44 @@ void UHTToggleGraphNode::NodeConnectionListChanged()
 	NormalizeDynamicInputs(true);
 }
 
+namespace HTToggleGraphNodes
+{
+	// Dynamic inputs are "In N" on groups and the generate node, "Target N" on Texture Switches and
+	// "Slots N" on Material Switches (pin names stay In / In_N so older graphs keep their links).
+	static FText MakeDynamicInputName(const UEdGraphPin* Pin, const int32 Index)
+	{
+		const UEdGraphNode* Owner = Pin ? Pin->GetOwningNodeUnchecked() : nullptr;
+		if (Owner && Owner->IsA<UHTToggleGraphNode_TextureSwitch>())
+		{
+			return FText::Format(LOCTEXT("TargetInput", "Target {0}"), FText::AsNumber(Index + 1));
+		}
+		if (Owner && Owner->IsA<UHTToggleGraphNode_MaterialSwitch>())
+		{
+			return FText::Format(LOCTEXT("SlotsInput", "Slots {0}"), FText::AsNumber(Index + 1));
+		}
+		return FText::Format(LOCTEXT("DynamicInput", "In {0}"), FText::AsNumber(Index + 1));
+	}
+}
+
+UHTToggleGraphNode_Part* UHTToggleGraphNode::GetLinkedPart(const UEdGraphPin* Pin)
+{
+	if (!Pin)
+	{
+		return nullptr;
+	}
+	for (const UEdGraphPin* Linked : Pin->LinkedTo)
+	{
+		if (UHTToggleGraphNode_Part* Part = Linked ? Cast<UHTToggleGraphNode_Part>(Linked->GetOwningNodeUnchecked()) : nullptr)
+		{
+			return Part;
+		}
+	}
+	return nullptr;
+}
+
 FText UHTToggleGraphNode::MakePinDisplayName(const UEdGraphPin* Pin)
 {
+	using namespace HTToggleGraphNodes;
 	if (!Pin)
 	{
 		return FText::GetEmpty();
@@ -191,12 +231,12 @@ FText UHTToggleGraphNode::MakePinDisplayName(const UEdGraphPin* Pin)
 		}
 		if (Name.StartsWith(TEXT("In_")))
 		{
-			return FText::Format(LOCTEXT("DynamicInput", "In {0}"), FText::AsNumber(Index + 1));
+			return MakeDynamicInputName(Pin, Index);
 		}
 	}
 	if (Pin->PinName == InputPinName)
 	{
-		return FText::Format(LOCTEXT("DynamicInput", "In {0}"), FText::AsNumber(1));
+		return MakeDynamicInputName(Pin, 0);
 	}
 	return FText::FromName(Pin->PinName);
 }
@@ -275,6 +315,7 @@ bool UHTToggleGraphNode::DoesPropertyRebuildNode(const FName MemberName)
 		GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Switch, KeyName),
 		GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Part, Label),
 		GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Part, MaterialIDs),
+		GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Part, SourceMaterial),
 		GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Group, Label),
 	};
 	for (const FName& Name : Names)
@@ -287,16 +328,26 @@ bool UHTToggleGraphNode::DoesPropertyRebuildNode(const FName MemberName)
 	return false;
 }
 
+const FProperty* UHTToggleGraphNode::GetEditedMemberProperty(const FPropertyChangedEvent& PropertyChangedEvent) const
+{
+	// The engine also calls PostEditChange without a property: while importing pasted or
+	// duplicated text (links to nodes later in the clipboard are still null and the node is not in
+	// the graph yet), from PostEditUndo (the transaction already restored the pins) and while
+	// loading. Reacting then would move half-resolved links, so only real property edits count.
+	const FProperty* Changed = PropertyChangedEvent.MemberProperty ? PropertyChangedEvent.MemberProperty : PropertyChangedEvent.Property;
+	const UEdGraph* Graph = GetGraph();
+	if (!Changed || GIsTransacting || HasAnyFlags(RF_ClassDefaultObject | RF_NeedLoad | RF_NeedPostLoad) || !Graph || !Graph->Nodes.Contains(this))
+	{
+		return nullptr;
+	}
+	return Changed;
+}
+
 void UHTToggleGraphNode::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
-	// The engine also calls this without a property: while importing pasted or duplicated text
-	// (links to nodes later in the clipboard are still null and the node is not in the graph
-	// yet), from PostEditUndo (the transaction already restored the pins) and while loading.
-	// Rebuilding then would move half-resolved links, so only real property edits rebuild.
-	const FProperty* Changed = PropertyChangedEvent.MemberProperty ? PropertyChangedEvent.MemberProperty : PropertyChangedEvent.Property;
-	UEdGraph* Graph = GetGraph();
-	if (!Changed || GIsTransacting || HasAnyFlags(RF_ClassDefaultObject | RF_NeedLoad | RF_NeedPostLoad) || !Graph || !Graph->Nodes.Contains(this))
+	const FProperty* Changed = GetEditedMemberProperty(PropertyChangedEvent);
+	if (!Changed)
 	{
 		return;
 	}
@@ -304,7 +355,7 @@ void UHTToggleGraphNode::PostEditChangeProperty(FPropertyChangedEvent& PropertyC
 	{
 		ReconstructNode();
 	}
-	Graph->NotifyGraphChanged();
+	GetGraph()->NotifyGraphChanged();
 }
 
 int32 UHTToggleGraphNode::RemoveDeadLinks()
@@ -397,7 +448,8 @@ void UHTToggleGraphNode::ReconstructNode()
 FString UHTToggleGraphNode_Part::GetDisplayLabel() const
 {
 	// Material IDs stay in the title so error messages and zoomed-out graphs remain readable.
-	const FString IDs = FString::JoinBy(MaterialIDs, TEXT(","), [](const int32 ID) { return FString::FromInt(ID); });
+	// By material parts show the slots looked up on the preview mesh, like the compile does.
+	const FString IDs = FString::JoinBy(GetEffectiveMaterialIDs(), TEXT(","), [](const int32 ID) { return FString::FromInt(ID); });
 	const FString Trimmed = Label.TrimStartAndEnd();
 	if (Trimmed.IsEmpty())
 	{
@@ -417,9 +469,50 @@ FLinearColor UHTToggleGraphNode_Part::GetNodeTitleColor() const
 	return FLinearColor(0.10f, 0.45f, 0.65f);
 }
 
+TArray<int32> UHTToggleGraphNode_Part::FindSlotsUsingMaterial(const USkeletalMesh* Mesh, const UMaterialInterface* Material)
+{
+	TArray<int32> Slots;
+	if (!Mesh || !Material)
+	{
+		return Slots;
+	}
+	const TArray<FSkeletalMaterial>& Materials = Mesh->GetMaterials();
+	for (int32 Slot = 0; Slot < Materials.Num(); ++Slot)
+	{
+		if (Materials[Slot].MaterialInterface == Material)
+		{
+			Slots.Add(Slot);
+		}
+	}
+	return Slots;
+}
+
+TArray<int32> UHTToggleGraphNode_Part::GetEffectiveMaterialIDs(bool* bOutMeshMissing) const
+{
+	if (bOutMeshMissing)
+	{
+		*bOutMeshMissing = false;
+	}
+	if (SourceMaterial.IsNull())
+	{
+		return MaterialIDs;
+	}
+	const UHTToggleGraph* Asset = GetToggleGraphAsset();
+	const USkeletalMesh* Mesh = Asset ? Asset->ResolvePreviewMesh() : nullptr;
+	if (!Mesh)
+	{
+		if (bOutMeshMissing)
+		{
+			*bOutMeshMissing = true;
+		}
+		return MaterialIDs;
+	}
+	return FindSlotsUsingMaterial(Mesh, SourceMaterial.LoadSynchronous());
+}
+
 FString UHTToggleGraphNode_Part::GetMaterialIDsText() const
 {
-	return FString::JoinBy(MaterialIDs, TEXT(", "), [](const int32 ID) { return FString::FromInt(ID); });
+	return FString::JoinBy(GetEffectiveMaterialIDs(), TEXT(", "), [](const int32 ID) { return FString::FromInt(ID); });
 }
 
 bool UHTToggleGraphNode_Part::ParseMaterialIDs(const FString& Text, TArray<int32>& OutIDs)
@@ -455,19 +548,21 @@ bool UHTToggleGraphNode_Part::SetMaterialIDsInline(const TArray<int32>& NewMater
 		}
 	}
 	Sorted.Sort();
-	if (Sorted == MaterialIDs)
+	// Picking slots by hand leaves By material mode.
+	if (Sorted == MaterialIDs && SourceMaterial.IsNull())
 	{
 		return false;
 	}
 	const FScopedTransaction Transaction(LOCTEXT("EditMaterialIDs", "Edit Part Material IDs"));
 	Modify();
 	MaterialIDs = MoveTemp(Sorted);
+	SourceMaterial.Reset();
 	return true;
 }
 
 bool UHTToggleGraphNode_Part::SetMaterialIDSelectedInline(const int32 MaterialID, const bool bSelected)
 {
-	TArray<int32> NewIDs = MaterialIDs;
+	TArray<int32> NewIDs = GetEffectiveMaterialIDs();
 	if (bSelected)
 	{
 		NewIDs.AddUnique(MaterialID);
@@ -477,6 +572,152 @@ bool UHTToggleGraphNode_Part::SetMaterialIDSelectedInline(const int32 MaterialID
 		NewIDs.Remove(MaterialID);
 	}
 	return SetMaterialIDsInline(NewIDs);
+}
+
+bool UHTToggleGraphNode_Part::SetSourceMaterialInline(UMaterialInterface* Material)
+{
+	const UHTToggleGraph* Asset = GetToggleGraphAsset();
+	TArray<int32> Slots = Material ? FindSlotsUsingMaterial(Asset ? Asset->ResolvePreviewMesh() : nullptr, Material) : MaterialIDs;
+	if (SourceMaterial.Get() == Material && Slots == MaterialIDs)
+	{
+		return false;
+	}
+	const FScopedTransaction Transaction(LOCTEXT("EditPartMaterial", "Pick Part Slots By Material"));
+	Modify();
+	SourceMaterial = Material;
+	MaterialIDs = MoveTemp(Slots);
+	return true;
+}
+
+void UHTToggleGraphNode_Part::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	// Details panel edits behave like the node's own controls.
+	if (const FProperty* Changed = GetEditedMemberProperty(PropertyChangedEvent))
+	{
+		if (Changed->GetFName() == GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Part, SourceMaterial) && !SourceMaterial.IsNull())
+		{
+			const UHTToggleGraph* Asset = GetToggleGraphAsset();
+			MaterialIDs = FindSlotsUsingMaterial(Asset ? Asset->ResolvePreviewMesh() : nullptr, SourceMaterial.LoadSynchronous());
+		}
+		else if (Changed->GetFName() == GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Part, MaterialIDs))
+		{
+			SourceMaterial.Reset();
+		}
+	}
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+}
+
+// ---------------------------------------------------------------- Switch base
+
+FString UHTToggleGraphNode_SwitchBase::GetOptionLabel(const int32 Option) const
+{
+	return OptionLabels.IsValidIndex(Option) ? OptionLabels[Option] : FString();
+}
+
+FString UHTToggleGraphNode_SwitchBase::GetDisplayLabel() const
+{
+	const FString Trimmed = Label.TrimStartAndEnd();
+	const FString Name = Trimmed.IsEmpty() ? VariableName.TrimStartAndEnd() : Trimmed;
+	const FString Key = KeyName.TrimStartAndEnd();
+	FString Title = GetKindTitle();
+	if (!Name.IsEmpty())
+	{
+		Title += TEXT(" ") + Name;
+	}
+	if (!Key.IsEmpty())
+	{
+		Title += FString::Printf(TEXT(" [%s]"), *Key);
+	}
+	return Title;
+}
+
+bool UHTToggleGraphNode_SwitchBase::SetVariableNameInline(const FString& NewVariableName)
+{
+	const FString Trimmed = NewVariableName.TrimStartAndEnd();
+	if (Trimmed == VariableName)
+	{
+		return false;
+	}
+	const FScopedTransaction Transaction(LOCTEXT("EditVariable", "Edit Switch Variable"));
+	Modify();
+	VariableName = Trimmed;
+	return true;
+}
+
+bool UHTToggleGraphNode_SwitchBase::SetKeyNameInline(const FString& NewKeyName)
+{
+	const FString Trimmed = NewKeyName.TrimStartAndEnd();
+	if (Trimmed == KeyName)
+	{
+		return false;
+	}
+	const FScopedTransaction Transaction(LOCTEXT("EditKey", "Edit Switch Key"));
+	Modify();
+	KeyName = Trimmed;
+	return true;
+}
+
+bool UHTToggleGraphNode_SwitchBase::SetOptionCountInline(const int32 NewOptionCount)
+{
+	const int32 Clamped = FMath::Clamp(NewOptionCount, MinOptions, MaxOptions);
+	if (Clamped == OptionCount)
+	{
+		return false;
+	}
+	const FScopedTransaction Transaction(LOCTEXT("EditOptionCount", "Change Switch Option Count"));
+	Modify();
+	OptionCount = Clamped;
+	InitialOption = FMath::Clamp(InitialOption, 0, OptionCount - 1);
+	if (OptionLabels.Num() > OptionCount)
+	{
+		OptionLabels.SetNum(OptionCount);
+	}
+	while (!OptionLabels.IsEmpty() && OptionLabels.Last().IsEmpty())
+	{
+		OptionLabels.Pop();
+	}
+	OnOptionCountChanged();
+	ReconstructNode();
+	return true;
+}
+
+bool UHTToggleGraphNode_SwitchBase::SetInitialOptionInline(const int32 NewInitialOption)
+{
+	const int32 Clamped = FMath::Clamp(NewInitialOption, 0, OptionCount - 1);
+	if (Clamped == InitialOption)
+	{
+		return false;
+	}
+	const FScopedTransaction Transaction(LOCTEXT("EditInitialOption", "Change Switch Initial Option"));
+	Modify();
+	InitialOption = Clamped;
+	return true;
+}
+
+bool UHTToggleGraphNode_SwitchBase::SetOptionLabelInline(const int32 Option, const FString& NewLabel)
+{
+	if (Option < 0 || Option >= OptionCount)
+	{
+		return false;
+	}
+	const FString Trimmed = NewLabel.TrimStartAndEnd();
+	if (GetOptionLabel(Option) == Trimmed)
+	{
+		return false;
+	}
+	const FScopedTransaction Transaction(LOCTEXT("EditOptionLabel", "Edit Switch Option Label"));
+	Modify();
+	if (OptionLabels.Num() <= Option)
+	{
+		OptionLabels.SetNum(Option + 1);
+	}
+	OptionLabels[Option] = Trimmed;
+	// Trailing empty labels carry no information.
+	while (!OptionLabels.IsEmpty() && OptionLabels.Last().IsEmpty())
+	{
+		OptionLabels.Pop();
+	}
+	return true;
 }
 
 // ---------------------------------------------------------------- Switch
@@ -510,28 +751,6 @@ int32 UHTToggleGraphNode_Switch::GetOptionIndex(const UEdGraphPin* Pin) const
 	return INDEX_NONE;
 }
 
-FString UHTToggleGraphNode_Switch::GetOptionLabel(const int32 Option) const
-{
-	return OptionLabels.IsValidIndex(Option) ? OptionLabels[Option] : FString();
-}
-
-FString UHTToggleGraphNode_Switch::GetDisplayLabel() const
-{
-	const FString Trimmed = Label.TrimStartAndEnd();
-	const FString Name = Trimmed.IsEmpty() ? VariableName.TrimStartAndEnd() : Trimmed;
-	const FString Key = KeyName.TrimStartAndEnd();
-	FString Title = TEXT("Switch");
-	if (!Name.IsEmpty())
-	{
-		Title += TEXT(" ") + Name;
-	}
-	if (!Key.IsEmpty())
-	{
-		Title += FString::Printf(TEXT(" [%s]"), *Key);
-	}
-	return Title;
-}
-
 void UHTToggleGraphNode_Switch::AllocateDefaultPins()
 {
 	OptionCount = FMath::Clamp(OptionCount, MinOptions, MaxOptions);
@@ -549,92 +768,186 @@ FLinearColor UHTToggleGraphNode_Switch::GetNodeTitleColor() const
 	return FLinearColor(0.62f, 0.32f, 0.08f);
 }
 
-bool UHTToggleGraphNode_Switch::SetVariableNameInline(const FString& NewVariableName)
+// ---------------------------------------------------------------- Texture Switch
+
+TSoftObjectPtr<UTexture> UHTToggleGraphNode_TextureSwitch::GetTargetTexture(const int32 Target, const int32 Option) const
 {
-	const FString Trimmed = NewVariableName.TrimStartAndEnd();
-	if (Trimmed == VariableName)
+	return Targets.IsValidIndex(Target) && Targets[Target].OptionTextures.IsValidIndex(Option) ? Targets[Target].OptionTextures[Option] : TSoftObjectPtr<UTexture>();
+}
+
+bool UHTToggleGraphNode_TextureSwitch::SetParameterNameInline(const FString& NewParameterName)
+{
+	const FString Trimmed = NewParameterName.TrimStartAndEnd();
+	if (Trimmed == ParameterName)
 	{
 		return false;
 	}
-	const FScopedTransaction Transaction(LOCTEXT("EditVariable", "Edit Switch Variable"));
+	const FScopedTransaction Transaction(LOCTEXT("EditTextureParameter", "Edit Texture Switch Parameter"));
 	Modify();
-	VariableName = Trimmed;
+	ParameterName = Trimmed;
 	return true;
 }
 
-bool UHTToggleGraphNode_Switch::SetKeyNameInline(const FString& NewKeyName)
+bool UHTToggleGraphNode_TextureSwitch::SetTargetTextureInline(const int32 Target, const int32 Option, UTexture* Texture)
 {
-	const FString Trimmed = NewKeyName.TrimStartAndEnd();
-	if (Trimmed == KeyName)
+	if (Target < 0 || Target >= MaxDynamicInputs || Option < 0 || Option >= OptionCount || GetTargetTexture(Target, Option).Get() == Texture)
 	{
 		return false;
 	}
-	const FScopedTransaction Transaction(LOCTEXT("EditKey", "Edit Switch Key"));
+	if (!Texture && GetTargetTexture(Target, Option).IsNull())
+	{
+		return false;
+	}
+	const FScopedTransaction Transaction(LOCTEXT("EditTargetTexture", "Edit Texture Switch Texture"));
 	Modify();
-	KeyName = Trimmed;
+	if (Targets.Num() <= Target)
+	{
+		Targets.SetNum(Target + 1);
+	}
+	TArray<TSoftObjectPtr<UTexture>>& Textures = Targets[Target].OptionTextures;
+	if (Textures.Num() <= Option)
+	{
+		Textures.SetNum(Option + 1);
+	}
+	Textures[Option] = Texture;
+	while (!Textures.IsEmpty() && Textures.Last().IsNull())
+	{
+		Textures.Pop();
+	}
 	return true;
 }
 
-bool UHTToggleGraphNode_Switch::SetOptionCountInline(const int32 NewOptionCount)
+TArray<UMaterialInterface*> UHTToggleGraphNode_TextureSwitch::GetTargetMaterials(const int32 Target) const
 {
-	const int32 Clamped = FMath::Clamp(NewOptionCount, MinOptions, MaxOptions);
-	if (Clamped == OptionCount)
+	TArray<UMaterialInterface*> Materials;
+	const UHTToggleGraphNode_Part* Part = GetTargetPart(Target);
+	if (!Part)
+	{
+		return Materials;
+	}
+	if (UMaterialInterface* Source = Part->SourceMaterial.LoadSynchronous())
+	{
+		Materials.Add(Source);
+		return Materials;
+	}
+	const UHTToggleGraph* Asset = GetToggleGraphAsset();
+	const USkeletalMesh* Mesh = Asset ? Asset->ResolvePreviewMesh() : nullptr;
+	if (!Mesh)
+	{
+		return Materials;
+	}
+	const TArray<FSkeletalMaterial>& MeshMaterials = Mesh->GetMaterials();
+	for (const int32 Slot : Part->GetEffectiveMaterialIDs())
+	{
+		if (MeshMaterials.IsValidIndex(Slot) && MeshMaterials[Slot].MaterialInterface)
+		{
+			Materials.AddUnique(MeshMaterials[Slot].MaterialInterface);
+		}
+	}
+	return Materials;
+}
+
+TArray<FName> UHTToggleGraphNode_TextureSwitch::GetCandidateParameters() const
+{
+	TArray<FName> Common;
+	bool bFirst = true;
+	for (int32 Target = 0; Target < InputCount; ++Target)
+	{
+		for (UMaterialInterface* Material : GetTargetMaterials(Target))
+		{
+			TArray<FMaterialParameterInfo> Infos;
+			TArray<FGuid> Ids;
+			Material->GetAllTextureParameterInfo(Infos, Ids);
+			TArray<FName> Names;
+			for (const FMaterialParameterInfo& Info : Infos)
+			{
+				Names.AddUnique(Info.Name);
+			}
+			if (bFirst)
+			{
+				Common = MoveTemp(Names);
+				bFirst = false;
+			}
+			else
+			{
+				Common.RemoveAll([&Names](const FName Name) { return !Names.Contains(Name); });
+			}
+		}
+	}
+	Common.Sort(FNameLexicalLess());
+	return Common;
+}
+
+void UHTToggleGraphNode_TextureSwitch::AllocateDefaultPins()
+{
+	OptionCount = FMath::Clamp(OptionCount, MinOptions, MaxOptions);
+	UEdGraphPin* Out = CreatePin(EGPD_Output, PinCategory, OutputPinName);
+	Out->PinFriendlyName = LOCTEXT("TextureSwitchOutput", "Out");
+	AllocateDynamicInputPins();
+}
+
+FLinearColor UHTToggleGraphNode_TextureSwitch::GetNodeTitleColor() const
+{
+	return FLinearColor(0.42f, 0.20f, 0.58f);
+}
+
+void UHTToggleGraphNode_TextureSwitch::OnOptionCountChanged()
+{
+	for (FHTToggleTextureTarget& Target : Targets)
+	{
+		if (Target.OptionTextures.Num() > OptionCount)
+		{
+			Target.OptionTextures.SetNum(OptionCount);
+		}
+	}
+}
+
+// ---------------------------------------------------------------- Material Switch
+
+TSoftObjectPtr<UMaterialInterface> UHTToggleGraphNode_MaterialSwitch::GetOptionMaterial(const int32 Option) const
+{
+	return OptionMaterials.IsValidIndex(Option) ? OptionMaterials[Option] : TSoftObjectPtr<UMaterialInterface>();
+}
+
+bool UHTToggleGraphNode_MaterialSwitch::SetOptionMaterialInline(const int32 Option, UMaterialInterface* Material)
+{
+	if (Option < 0 || Option >= OptionCount || GetOptionMaterial(Option).Get() == Material || (!Material && GetOptionMaterial(Option).IsNull()))
 	{
 		return false;
 	}
-	const FScopedTransaction Transaction(LOCTEXT("EditOptionCount", "Change Switch Option Count"));
+	const FScopedTransaction Transaction(LOCTEXT("EditOptionMaterial", "Edit Material Switch Material"));
 	Modify();
-	OptionCount = Clamped;
-	InitialOption = FMath::Clamp(InitialOption, 0, OptionCount - 1);
-	if (OptionLabels.Num() > OptionCount)
+	if (OptionMaterials.Num() <= Option)
 	{
-		OptionLabels.SetNum(OptionCount);
+		OptionMaterials.SetNum(Option + 1);
 	}
-	while (!OptionLabels.IsEmpty() && OptionLabels.Last().IsEmpty())
+	OptionMaterials[Option] = Material;
+	while (!OptionMaterials.IsEmpty() && OptionMaterials.Last().IsNull())
 	{
-		OptionLabels.Pop();
+		OptionMaterials.Pop();
 	}
-	ReconstructNode();
 	return true;
 }
 
-bool UHTToggleGraphNode_Switch::SetInitialOptionInline(const int32 NewInitialOption)
+void UHTToggleGraphNode_MaterialSwitch::AllocateDefaultPins()
 {
-	const int32 Clamped = FMath::Clamp(NewInitialOption, 0, OptionCount - 1);
-	if (Clamped == InitialOption)
-	{
-		return false;
-	}
-	const FScopedTransaction Transaction(LOCTEXT("EditInitialOption", "Change Switch Initial Option"));
-	Modify();
-	InitialOption = Clamped;
-	return true;
+	OptionCount = FMath::Clamp(OptionCount, MinOptions, MaxOptions);
+	UEdGraphPin* Out = CreatePin(EGPD_Output, PinCategory, OutputPinName);
+	Out->PinFriendlyName = LOCTEXT("MaterialSwitchOutput", "Out");
+	AllocateDynamicInputPins();
 }
 
-bool UHTToggleGraphNode_Switch::SetOptionLabelInline(const int32 Option, const FString& NewLabel)
+FLinearColor UHTToggleGraphNode_MaterialSwitch::GetNodeTitleColor() const
 {
-	if (Option < 0 || Option >= OptionCount)
+	return FLinearColor(0.08f, 0.46f, 0.44f);
+}
+
+void UHTToggleGraphNode_MaterialSwitch::OnOptionCountChanged()
+{
+	if (OptionMaterials.Num() > OptionCount)
 	{
-		return false;
+		OptionMaterials.SetNum(OptionCount);
 	}
-	const FString Trimmed = NewLabel.TrimStartAndEnd();
-	if (GetOptionLabel(Option) == Trimmed)
-	{
-		return false;
-	}
-	const FScopedTransaction Transaction(LOCTEXT("EditOptionLabel", "Edit Switch Option Label"));
-	Modify();
-	if (OptionLabels.Num() <= Option)
-	{
-		OptionLabels.SetNum(Option + 1);
-	}
-	OptionLabels[Option] = Trimmed;
-	// Trailing empty labels carry no information.
-	while (!OptionLabels.IsEmpty() && OptionLabels.Last().IsEmpty())
-	{
-		OptionLabels.Pop();
-	}
-	return true;
 }
 
 // ---------------------------------------------------------------- Group

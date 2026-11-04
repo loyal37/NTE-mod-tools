@@ -30,6 +30,7 @@
 #include "K2Node_VariableGet.h"
 #include "K2Node_VariableSet.h"
 #include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetMaterialLibrary.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet/KismetRenderingLibrary.h"
 #include "Kismet/KismetSystemLibrary.h"
@@ -2457,6 +2458,33 @@ namespace HTToggleGenerator
 		}
 	};
 
+	static const TCHAR* NestedSwitchKindName(const EHTNestedToggleSwitchKind Kind)
+	{
+		switch (Kind)
+		{
+		case EHTNestedToggleSwitchKind::Texture: return TEXT("Texture switch");
+		case EHTNestedToggleSwitchKind::Material: return TEXT("Material switch");
+		default: return TEXT("Switch");
+		}
+	}
+
+	// Two effects can never act at the same time when their parent paths require different
+	// options of one state variable.
+	static bool AreNestedConditionsExclusive(const TArray<FHTNestedToggleCondition>& A, const TArray<FHTNestedToggleCondition>& B)
+	{
+		for (const FHTNestedToggleCondition& First : A)
+		{
+			for (const FHTNestedToggleCondition& Second : B)
+			{
+				if (First.VariableIndex == Second.VariableIndex && First.Option != Second.Option)
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	static bool CompileNestedToggleGraphImpl(
 		const FHTNestedToggleGraph& Graph,
 		FHTNestedToggleCompiledGraph& OutCompiled,
@@ -2535,10 +2563,31 @@ namespace HTToggleGenerator
 				{
 					AddIssue({ NodeId }, FString::Printf(TEXT("Switch %s cannot hang on itself."), *NodeId));
 				}
+				else if (Graph.Switches[*ParentIndex].Kind != EHTNestedToggleSwitchKind::Visibility)
+				{
+					AddIssue({ NodeId, ParentId }, FString::Printf(TEXT("Switch %s hangs on %s, a %s. Texture and Material switches have no options to hang anything on."), *NodeId, *ParentId, NestedSwitchKindName(Graph.Switches[*ParentIndex].Kind)));
+				}
 				else if (Switch.ParentOption < 0 || Switch.ParentOption >= Graph.Switches[*ParentIndex].OptionCount)
 				{
 					AddIssue({ NodeId, ParentId }, FString::Printf(TEXT("Switch %s hangs on option %d of %s, which only has options 0..%d."), *NodeId, Switch.ParentOption, *ParentId, Graph.Switches[*ParentIndex].OptionCount - 1));
 				}
+			}
+			if (Switch.Kind == EHTNestedToggleSwitchKind::Texture)
+			{
+				if (Trimmed(Switch.TextureParameterName).IsEmpty())
+				{
+					AddIssue({ NodeId }, FString::Printf(TEXT("Texture switch %s has no texture parameter."), *NodeId));
+				}
+				if (Switch.TextureTargets.IsEmpty())
+				{
+					AddIssue({ NodeId }, FString::Printf(TEXT("Texture switch %s has no target. Connect a part to one of its Target inputs."), *NodeId));
+				}
+			}
+			else if (Switch.Kind == EHTNestedToggleSwitchKind::Material && Switch.MaterialIDs.IsEmpty())
+			{
+				TArray<FString> Ids = { NodeId };
+				Ids.Append(Switch.TargetPartNodeIds);
+				AddIssue(Ids, FString::Printf(TEXT("Material switch %s has no material slot. Connect a part with material IDs to one of its Slots inputs."), *NodeId));
 			}
 		}
 		if (!OutErrors.IsEmpty())
@@ -2765,6 +2814,12 @@ namespace HTToggleGenerator
 					break;
 				}
 				const FHTNestedToggleSwitch& Switch = Graph.Switches[*SwitchIndex];
+				if (Switch.Kind != EHTNestedToggleSwitchKind::Visibility)
+				{
+					AddIssue({ NodeId, StepId }, FString::Printf(TEXT("Part %s hangs on %s, a %s. Connect parts to its Target or Slots inputs instead."), *NodeId, *StepId, NestedSwitchKindName(Switch.Kind)));
+					bPathValid = false;
+					break;
+				}
 				if (Step.Option < 0 || Step.Option >= Switch.OptionCount)
 				{
 					AddIssue({ NodeId, StepId }, FString::Printf(TEXT("Part %s hangs on option %d of switch %s, which only has options 0..%d."), *NodeId, Step.Option, *StepId, Switch.OptionCount - 1));
@@ -2791,9 +2846,189 @@ namespace HTToggleGenerator
 			}
 		}
 
+		// Texture and Material switches: one effect per slot, gated by the switch's parent path.
+		auto ConditionsOfSwitch = [&](const int32 Index)
+		{
+			TArray<FHTNestedToggleCondition> Conditions;
+			int32 Child = Index;
+			for (int32 Cursor = ParentIndexOf(Index); Cursor != INDEX_NONE; Cursor = ParentIndexOf(Cursor))
+			{
+				FHTNestedToggleCondition Condition;
+				Condition.VariableIndex = OutCompiled.SwitchVariableIndices[Cursor];
+				Condition.Option = Graph.Switches[Child].ParentOption;
+				Conditions.Insert(Condition, 0);
+				Child = Cursor;
+			}
+			return Conditions;
+		};
+		for (const TPair<int32, FString>& Slot : Graph.SlotMaterialPaths)
+		{
+			OutCompiled.SlotMaterialPaths.Add(Slot.Key, Trimmed(Slot.Value));
+		}
+		TSet<int32> EffectSlots;
+		auto OriginalOf = [&OutCompiled](const int32 MaterialID)
+		{
+			const FString* Path = OutCompiled.SlotMaterialPaths.Find(MaterialID);
+			return Path ? *Path : FString();
+		};
+		for (int32 Index = 0; Index < SwitchCount; ++Index)
+		{
+			const FHTNestedToggleSwitch& Switch = Graph.Switches[Index];
+			if (Switch.Kind == EHTNestedToggleSwitchKind::Visibility)
+			{
+				continue;
+			}
+			const FString NodeId = Trimmed(Switch.NodeId);
+			const TArray<FHTNestedToggleCondition> Conditions = ConditionsOfSwitch(Index);
+			const int32 VariableIndex = OutCompiled.SwitchVariableIndices[Index];
+			if (Switch.Kind == EHTNestedToggleSwitchKind::Material)
+			{
+				TArray<int32> Slots;
+				for (const int32 MaterialID : Switch.MaterialIDs)
+				{
+					if (MaterialID < 0)
+					{
+						AddIssue({ NodeId }, FString::Printf(TEXT("Material switch %s has a negative material ID %d."), *NodeId, MaterialID));
+						continue;
+					}
+					Slots.AddUnique(MaterialID);
+				}
+				Slots.Sort();
+				for (const int32 MaterialID : Slots)
+				{
+					const FString Original = OriginalOf(MaterialID);
+					if (Original.IsEmpty())
+					{
+						AddIssue({ NodeId }, FString::Printf(TEXT("Material switch %s acts on material ID %d, which has no material on the preview mesh."), *NodeId, MaterialID));
+						continue;
+					}
+					FHTNestedToggleCompiledMaterialEffect& Effect = OutCompiled.MaterialEffects.AddDefaulted_GetRef();
+					Effect.SwitchIndex = Index;
+					Effect.VariableIndex = VariableIndex;
+					Effect.Conditions = Conditions;
+					Effect.MaterialID = MaterialID;
+					for (int32 Option = 0; Option < Switch.OptionCount; ++Option)
+					{
+						const FString Path = Switch.OptionMaterialPaths.IsValidIndex(Option) ? Trimmed(Switch.OptionMaterialPaths[Option]) : FString();
+						Effect.OptionMaterialPaths.Add(Path.IsEmpty() ? Original : Path);
+					}
+					EffectSlots.Add(MaterialID);
+				}
+				continue;
+			}
+			const FName Parameter(*Trimmed(Switch.TextureParameterName));
+			for (int32 TargetIndex = 0; TargetIndex < Switch.TextureTargets.Num(); ++TargetIndex)
+			{
+				const FHTNestedToggleTextureTarget& Target = Switch.TextureTargets[TargetIndex];
+				const FString PartId = Trimmed(Target.PartNodeId);
+				TArray<FString> Ids = { NodeId };
+				if (!PartId.IsEmpty())
+				{
+					Ids.Add(PartId);
+				}
+				if (Target.MaterialIDs.IsEmpty())
+				{
+					AddIssue(Ids, FString::Printf(TEXT("Texture switch %s target %d (%s) has no material ID."), *NodeId, TargetIndex + 1, *PartId));
+				}
+				TArray<int32> Seen;
+				for (const int32 MaterialID : Target.MaterialIDs)
+				{
+					if (MaterialID < 0)
+					{
+						AddIssue(Ids, FString::Printf(TEXT("Texture switch %s target %d has a negative material ID %d."), *NodeId, TargetIndex + 1, MaterialID));
+						continue;
+					}
+					if (Seen.Contains(MaterialID))
+					{
+						continue;
+					}
+					Seen.Add(MaterialID);
+					const FString Original = OriginalOf(MaterialID);
+					if (Original.IsEmpty())
+					{
+						AddIssue(Ids, FString::Printf(TEXT("Texture switch %s acts on material ID %d, which has no material on the preview mesh."), *NodeId, MaterialID));
+						continue;
+					}
+					const FString ExplicitParent = Trimmed(Target.ParentMaterialPath);
+					FHTNestedToggleCompiledTextureEffect& Effect = OutCompiled.TextureEffects.AddDefaulted_GetRef();
+					Effect.SwitchIndex = Index;
+					Effect.TargetIndex = TargetIndex;
+					Effect.VariableIndex = VariableIndex;
+					Effect.Conditions = Conditions;
+					Effect.MaterialID = MaterialID;
+					Effect.ParameterName = Parameter;
+					Effect.ParentMaterialPath = ExplicitParent.IsEmpty() ? Original : ExplicitParent;
+					for (int32 Option = 0; Option < Switch.OptionCount; ++Option)
+					{
+						Effect.TexturePaths.Add(Target.TexturePaths.IsValidIndex(Option) ? Trimmed(Target.TexturePaths[Option]) : FString());
+					}
+					EffectSlots.Add(MaterialID);
+				}
+			}
+		}
+
+		// Two effects on one slot (one parameter of one material, for textures) must never be
+		// active together; mutually exclusive parent paths are fine.
+		TSet<FString> ReportedPairs;
+		auto SwitchId = [&Graph](const int32 Index) { return Trimmed(Graph.Switches[Index].NodeId); };
+		for (int32 First = 0; First < OutCompiled.MaterialEffects.Num(); ++First)
+		{
+			for (int32 Second = First + 1; Second < OutCompiled.MaterialEffects.Num(); ++Second)
+			{
+				const FHTNestedToggleCompiledMaterialEffect& A = OutCompiled.MaterialEffects[First];
+				const FHTNestedToggleCompiledMaterialEffect& B = OutCompiled.MaterialEffects[Second];
+				if (A.MaterialID != B.MaterialID || A.SwitchIndex == B.SwitchIndex || AreNestedConditionsExclusive(A.Conditions, B.Conditions))
+				{
+					continue;
+				}
+				const FString Pair = FString::Printf(TEXT("M%d-%d"), A.SwitchIndex, B.SwitchIndex);
+				if (!ReportedPairs.Contains(Pair))
+				{
+					ReportedPairs.Add(Pair);
+					AddIssue({ SwitchId(A.SwitchIndex), SwitchId(B.SwitchIndex) }, FString::Printf(TEXT("Material ID %d is switched by Material switches %s and %s, which can be active at the same time. Hang them on different options of one switch, or remove the slot from one of them."), A.MaterialID, *SwitchId(A.SwitchIndex), *SwitchId(B.SwitchIndex)));
+				}
+			}
+		}
+		for (int32 First = 0; First < OutCompiled.TextureEffects.Num(); ++First)
+		{
+			for (int32 Second = First + 1; Second < OutCompiled.TextureEffects.Num(); ++Second)
+			{
+				const FHTNestedToggleCompiledTextureEffect& A = OutCompiled.TextureEffects[First];
+				const FHTNestedToggleCompiledTextureEffect& B = OutCompiled.TextureEffects[Second];
+				if (A.MaterialID != B.MaterialID || A.ParameterName != B.ParameterName
+					|| !A.ParentMaterialPath.Equals(B.ParentMaterialPath, ESearchCase::IgnoreCase)
+					|| AreNestedConditionsExclusive(A.Conditions, B.Conditions))
+				{
+					continue;
+				}
+				const FString Pair = FString::Printf(TEXT("T%d.%d-%d.%d"), A.SwitchIndex, A.TargetIndex, B.SwitchIndex, B.TargetIndex);
+				if (ReportedPairs.Contains(Pair))
+				{
+					continue;
+				}
+				ReportedPairs.Add(Pair);
+				const FHTNestedToggleSwitch& SwitchA = Graph.Switches[A.SwitchIndex];
+				if (A.SwitchIndex == B.SwitchIndex)
+				{
+					const FString PartA = Trimmed(SwitchA.TextureTargets[A.TargetIndex].PartNodeId);
+					const FString PartB = Trimmed(SwitchA.TextureTargets[B.TargetIndex].PartNodeId);
+					AddIssue({ SwitchId(A.SwitchIndex), PartA, PartB }, FString::Printf(TEXT("Texture switch %s sets %s on material ID %d through two targets (%s and %s). Each slot can only be one target."), *SwitchId(A.SwitchIndex), *A.ParameterName.ToString(), A.MaterialID, *PartA, *PartB));
+				}
+				else
+				{
+					AddIssue({ SwitchId(A.SwitchIndex), SwitchId(B.SwitchIndex) }, FString::Printf(TEXT("Material ID %d parameter %s is set by Texture switches %s and %s, which can be active at the same time. Hang them on different options of one switch, or use different parameters."), A.MaterialID, *A.ParameterName.ToString(), *SwitchId(A.SwitchIndex), *SwitchId(B.SwitchIndex)));
+				}
+			}
+		}
+		OutCompiled.EffectMaterialIDs = EffectSlots.Array();
+		OutCompiled.EffectMaterialIDs.Sort();
+
 		if (!OutErrors.IsEmpty())
 		{
 			OutCompiled.Parts.Empty();
+			OutCompiled.MaterialEffects.Empty();
+			OutCompiled.TextureEffects.Empty();
+			OutCompiled.EffectMaterialIDs.Empty();
 			return false;
 		}
 		return true;
@@ -2889,10 +3124,498 @@ namespace HTToggleGenerator
 		return Call;
 	}
 
-	// HTN_Apply_<Name>: every managed material ID gets visible = AND(variable == option) over its path.
+	static FName MakeNestedBaseVariable(const FString& TreeName, const int32 MaterialID)
+	{
+		return FName(*FString::Printf(TEXT("HTN_%s_Base%d"), *TreeName, MaterialID));
+	}
+
+	static FName MakeNestedMIDVariable(const FString& TreeName, const int32 MaterialID, const int32 ParentIndex)
+	{
+		return FName(*FString::Printf(TEXT("HTN_%s_MID%d_%d"), *TreeName, MaterialID, ParentIndex));
+	}
+
+	// True for "HTN_<Tree>_Base<digits>" and "HTN_<Tree>_MID<digits>_<digits>" of this tree only.
+	static bool IsNestedEffectVariable(const FString& TreeName, const FString& Name)
+	{
+		auto DigitsThenEnd = [](const FString& Rest, const bool bAllowOneUnderscore)
+		{
+			int32 Underscores = 0;
+			bool bDigitBefore = false;
+			for (const TCHAR Character : Rest)
+			{
+				if (FChar::IsDigit(Character))
+				{
+					bDigitBefore = true;
+				}
+				else if (Character == TEXT('_') && bAllowOneUnderscore && bDigitBefore && Underscores == 0)
+				{
+					++Underscores;
+					bDigitBefore = false;
+				}
+				else
+				{
+					return false;
+				}
+			}
+			return bDigitBefore && (!bAllowOneUnderscore || Underscores == 1);
+		};
+		const FString BasePrefix = FString::Printf(TEXT("HTN_%s_Base"), *TreeName);
+		const FString MIDPrefix = FString::Printf(TEXT("HTN_%s_MID"), *TreeName);
+		if (Name.StartsWith(BasePrefix, ESearchCase::CaseSensitive))
+		{
+			return DigitsThenEnd(Name.Mid(BasePrefix.Len()), false);
+		}
+		if (Name.StartsWith(MIDPrefix, ESearchCase::CaseSensitive))
+		{
+			return DigitsThenEnd(Name.Mid(MIDPrefix.Len()), true);
+		}
+		return false;
+	}
+
+	// Distinct parent materials of the texture effects on one slot, in first-seen order.
+	static TArray<FString> GetNestedTextureParents(const FHTNestedToggleCompiledGraph& Compiled, const int32 MaterialID)
+	{
+		TArray<FString> Parents;
+		for (const FHTNestedToggleCompiledTextureEffect& Effect : Compiled.TextureEffects)
+		{
+			if (Effect.MaterialID == MaterialID && !Parents.ContainsByPredicate([&Effect](const FString& Path) { return Path.Equals(Effect.ParentMaterialPath, ESearchCase::IgnoreCase); }))
+			{
+				Parents.Add(Effect.ParentMaterialPath);
+			}
+		}
+		return Parents;
+	}
+
+	// Every material and texture the effects use, loaded and checked before any asset is touched.
+	struct FNestedEffectAssets
+	{
+		TMap<FString, UMaterialInterface*> Materials;
+		TMap<FString, UTexture*> Textures;
+		// "<parent path>|<parameter>" -> the parent material's own texture for that parameter.
+		TMap<FString, UTexture*> ParameterDefaults;
+
+		UMaterialInterface* Material(const FString& Path) const
+		{
+			UMaterialInterface* const* Found = Materials.Find(Path);
+			return Found ? *Found : nullptr;
+		}
+
+		UTexture* Texture(const FString& Path) const
+		{
+			UTexture* const* Found = Textures.Find(Path);
+			return Found ? *Found : nullptr;
+		}
+
+		static FString DefaultKey(const FString& ParentPath, const FName Parameter)
+		{
+			return ParentPath + TEXT("|") + Parameter.ToString();
+		}
+	};
+
+	static bool LoadNestedEffectAssets(const FHTNestedToggleGraph& Graph, const FHTNestedToggleCompiledGraph& Compiled, FNestedEffectAssets& Out, TArray<FHTNestedToggleIssue>& OutErrors)
+	{
+		const int32 ErrorsBefore = OutErrors.Num();
+		auto AddIssue = [&OutErrors](TArray<FString> NodeIds, const FString& Message)
+		{
+			FHTNestedToggleIssue& Issue = OutErrors.AddDefaulted_GetRef();
+			Issue.NodeIds = MoveTemp(NodeIds);
+			Issue.Message = Message;
+		};
+		auto LoadMaterialOnce = [&](const FString& Path, const TArray<FString>& NodeIds, const FString& What) -> UMaterialInterface*
+		{
+			if (UMaterialInterface* Found = Out.Material(Path))
+			{
+				return Found;
+			}
+			FHTBlueprintToggleGeneratorResult Scratch;
+			UMaterialInterface* Material = LoadMaterial(Path, Scratch, What);
+			if (Material)
+			{
+				Out.Materials.Add(Path, Material);
+			}
+			else
+			{
+				AddIssue(NodeIds, FString::Printf(TEXT("%s could not be loaded: %s"), *What, *Path));
+			}
+			return Material;
+		};
+		auto SwitchId = [&Graph](const int32 Index) { return Trimmed(Graph.Switches[Index].NodeId); };
+		for (const int32 MaterialID : Compiled.EffectMaterialIDs)
+		{
+			TArray<FString> NodeIds;
+			for (const FHTNestedToggleCompiledMaterialEffect& Effect : Compiled.MaterialEffects)
+			{
+				if (Effect.MaterialID == MaterialID)
+				{
+					NodeIds.AddUnique(SwitchId(Effect.SwitchIndex));
+				}
+			}
+			for (const FHTNestedToggleCompiledTextureEffect& Effect : Compiled.TextureEffects)
+			{
+				if (Effect.MaterialID == MaterialID)
+				{
+					NodeIds.AddUnique(SwitchId(Effect.SwitchIndex));
+				}
+			}
+			LoadMaterialOnce(Compiled.SlotMaterialPaths.FindRef(MaterialID), NodeIds, FString::Printf(TEXT("The original material of material ID %d"), MaterialID));
+		}
+		for (const FHTNestedToggleCompiledMaterialEffect& Effect : Compiled.MaterialEffects)
+		{
+			for (int32 Option = 0; Option < Effect.OptionMaterialPaths.Num(); ++Option)
+			{
+				LoadMaterialOnce(Effect.OptionMaterialPaths[Option], { SwitchId(Effect.SwitchIndex) }, FString::Printf(TEXT("Material switch %s option %d material"), *SwitchId(Effect.SwitchIndex), Option + 1));
+			}
+		}
+		for (const FHTNestedToggleCompiledTextureEffect& Effect : Compiled.TextureEffects)
+		{
+			const FHTNestedToggleSwitch& Switch = Graph.Switches[Effect.SwitchIndex];
+			const FString PartId = Trimmed(Switch.TextureTargets[Effect.TargetIndex].PartNodeId);
+			const TArray<FString> NodeIds = { SwitchId(Effect.SwitchIndex), PartId };
+			UMaterialInterface* Parent = LoadMaterialOnce(Effect.ParentMaterialPath, NodeIds, FString::Printf(TEXT("Texture switch %s target material"), *SwitchId(Effect.SwitchIndex)));
+			const FString Key = FNestedEffectAssets::DefaultKey(Effect.ParentMaterialPath, Effect.ParameterName);
+			if (Parent && !Out.ParameterDefaults.Contains(Key))
+			{
+				UTexture* Default = nullptr;
+				if (Parent->GetTextureParameterValue(FHashedMaterialParameterInfo(FMaterialParameterInfo(Effect.ParameterName)), Default))
+				{
+					Out.ParameterDefaults.Add(Key, Default);
+				}
+				else
+				{
+					AddIssue(NodeIds, FString::Printf(TEXT("Texture switch %s: material %s (material ID %d, part %s) has no texture parameter %s."), *SwitchId(Effect.SwitchIndex), *Parent->GetName(), Effect.MaterialID, *PartId, *Effect.ParameterName.ToString()));
+				}
+			}
+			for (int32 Option = 0; Option < Effect.TexturePaths.Num(); ++Option)
+			{
+				const FString& Path = Effect.TexturePaths[Option];
+				if (Path.IsEmpty() || Out.Textures.Contains(Path))
+				{
+					continue;
+				}
+				FHTBlueprintToggleGeneratorResult Scratch;
+				if (UTexture* Texture = LoadTexture(Path, Scratch, TEXT("Texture")))
+				{
+					Out.Textures.Add(Path, Texture);
+				}
+				else
+				{
+					AddIssue(NodeIds, FString::Printf(TEXT("Texture switch %s option %d texture could not be loaded: %s"), *SwitchId(Effect.SwitchIndex), Option + 1, *Path));
+				}
+			}
+		}
+		return OutErrors.Num() == ErrorsBefore;
+	}
+
+	// Exec outputs that all continue into the next node (Switch cases, Branch exits, ...).
+	struct FNestedExecFlow
+	{
+		TArray<UEdGraphPin*> Pending;
+
+		bool Enter(UEdGraphNode* Node, FHTBlueprintToggleGeneratorResult& Result, const TCHAR* Label)
+		{
+			UEdGraphPin* In = Node ? GetSchema()->FindExecutionPin(*Node, EGPD_Input) : nullptr;
+			bool bConnected = In != nullptr;
+			for (UEdGraphPin* Pin : Pending)
+			{
+				bConnected &= Connect(Pin, In, Result, Label);
+			}
+			Pending.Reset();
+			return bConnected;
+		}
+
+		bool Through(UEdGraphNode* Node, FHTBlueprintToggleGeneratorResult& Result, const TCHAR* Label)
+		{
+			if (!Enter(Node, Result, Label))
+			{
+				return false;
+			}
+			Pending.Add(GetSchema()->FindExecutionPin(*Node, EGPD_Output));
+			return true;
+		}
+	};
+
+	// AND(variable == option) over Conditions; nullptr when there are none (always true).
+	static UEdGraphPin* BuildNestedConditionPin(
+		FNestedGenerationContext& Context,
+		const FHTNestedToggleCompiledGraph& Compiled,
+		const TArray<FHTNestedToggleCondition>& Conditions,
+		const FVector2D Base,
+		bool& bOutOk,
+		FHTBlueprintToggleGeneratorResult& Result)
+	{
+		bOutOk = true;
+		TArray<UEdGraphPin*> Pins;
+		for (int32 Index = 0; Index < Conditions.Num(); ++Index)
+		{
+			const FName VariableName = Compiled.Variables[Conditions[Index].VariableIndex].VariableName;
+			UK2Node_VariableGet* GetVariable = SpawnVariableGet(Context.Graph, VariableName, nullptr, Base + FVector2D(0.0f, 140.0f + Index * 150.0f));
+			UK2Node_CallFunction* Equal = SpawnCall(Context.Graph, UKismetMathLibrary::StaticClass(), TEXT("EqualEqual_IntInt"), Base + FVector2D(260.0f, 120.0f + Index * 150.0f), Result);
+			if (!GetVariable || !Equal)
+			{
+				bOutOk = false;
+				return nullptr;
+			}
+			Context.Track({ GetVariable, Equal });
+			SetDefaultValue(FindAnyPin(Equal, TEXT("B")), FString::FromInt(Conditions[Index].Option));
+			bOutOk &= Connect(FindAnyPin(GetVariable, VariableName), FindAnyPin(Equal, TEXT("A")), Result, TEXT("Toggle tree effect state -> Equal"));
+			Pins.Add(FindAnyPin(Equal, UEdGraphSchema_K2::PN_ReturnValue));
+		}
+		if (Pins.Num() <= 1)
+		{
+			return Pins.IsEmpty() ? nullptr : Pins[0];
+		}
+		UK2Node_CommutativeAssociativeBinaryOperator* And = SpawnBooleanOperator(Context.Graph, TEXT("BooleanAND"), Base + FVector2D(520.0f, 140.0f), Pins.Num(), Result);
+		if (!And)
+		{
+			bOutOk = false;
+			return nullptr;
+		}
+		Context.Track({ And });
+		for (int32 Index = 0; Index < Pins.Num(); ++Index)
+		{
+			bOutOk &= Connect(Pins[Index], And->GetInputPin(Index), Result, TEXT("Toggle tree effect condition -> AND"));
+		}
+		return FindAnyPin(And, UEdGraphSchema_K2::PN_ReturnValue);
+	}
+
+	// Lets the flow pass only while Conditions hold; the false exit goes to OutSkipped.
+	static bool BuildNestedGate(
+		FNestedGenerationContext& Context,
+		const FHTNestedToggleCompiledGraph& Compiled,
+		const TArray<FHTNestedToggleCondition>& Conditions,
+		FNestedExecFlow& Flow,
+		TArray<UEdGraphPin*>& OutSkipped,
+		const FVector2D Base,
+		FHTBlueprintToggleGeneratorResult& Result)
+	{
+		if (Conditions.IsEmpty())
+		{
+			return true;
+		}
+		bool bOk = true;
+		UEdGraphPin* Condition = BuildNestedConditionPin(Context, Compiled, Conditions, Base, bOk, Result);
+		UK2Node_IfThenElse* Branch = SpawnBranch(Context.Graph, Base + FVector2D(Conditions.Num() > 1 ? 760.0f : 520.0f, 0.0f));
+		if (!bOk || !Condition || !Branch)
+		{
+			return false;
+		}
+		Context.Track({ Branch });
+		bOk &= Connect(Condition, FindAnyPin(Branch, UEdGraphSchema_K2::PN_Condition), Result, TEXT("Toggle tree effect condition -> Branch"));
+		bOk &= Flow.Enter(Branch, Result, TEXT("Toggle tree effect -> Branch"));
+		Flow.Pending.Add(FindAnyPin(Branch, UEdGraphSchema_K2::PN_Then));
+		OutSkipped.Add(FindAnyPin(Branch, UEdGraphSchema_K2::PN_Else));
+		return bOk;
+	}
+
+	// One managed slot: base = original, Material switches replace the base, Texture switches
+	// whose material is the current base write into a per (slot, material) MID, then SetMaterial.
+	static bool BuildNestedEffectSlot(
+		FNestedGenerationContext& Context,
+		const FHTNestedToggleCompiledGraph& Compiled,
+		const FNestedEffectAssets& Assets,
+		const int32 MaterialID,
+		UEdGraphPin* OwningPin,
+		FNestedExecFlow& Flow,
+		const FVector2D Base,
+		float& OutHeight,
+		FHTBlueprintToggleGeneratorResult& Result)
+	{
+		UEdGraph* Graph = Context.Graph;
+		const FName BaseVariable = MakeNestedBaseVariable(Compiled.Name, MaterialID);
+		const FString OriginalPath = Compiled.SlotMaterialPaths.FindRef(MaterialID);
+		float X = Base.X;
+		const float Y = Base.Y;
+		float Bottom = Y + 300.0f;
+		auto Advance = [&X](const float Width = 380.0f)
+		{
+			const float Current = X;
+			X += Width;
+			return Current;
+		};
+		bool bOk = true;
+
+		UK2Node_VariableSet* SetOriginal = SpawnVariableSet(Graph, BaseVariable, nullptr, FVector2D(Advance(), Y));
+		if (!SetOriginal)
+		{
+			return false;
+		}
+		Context.Track({ SetOriginal });
+		SetDefaultObject(FindAnyPin(SetOriginal, BaseVariable), Assets.Material(OriginalPath));
+		bOk &= Flow.Through(SetOriginal, Result, TEXT("Toggle tree slot -> original material"));
+
+		for (const FHTNestedToggleCompiledMaterialEffect& Effect : Compiled.MaterialEffects)
+		{
+			if (Effect.MaterialID != MaterialID)
+			{
+				continue;
+			}
+			TArray<UEdGraphPin*> Skipped;
+			bOk &= BuildNestedGate(Context, Compiled, Effect.Conditions, Flow, Skipped, FVector2D(Advance(Effect.Conditions.IsEmpty() ? 0.0f : 1060.0f), Y), Result);
+			const FName Variable = Compiled.Variables[Effect.VariableIndex].VariableName;
+			const int32 OptionCount = Effect.OptionMaterialPaths.Num();
+			UK2Node_VariableGet* GetState = SpawnVariableGet(Graph, Variable, nullptr, FVector2D(X, Y + 220.0f));
+			UK2Node_SwitchInteger* Switch = SpawnSwitchOnInt(Graph, FVector2D(Advance(), Y), OptionCount);
+			if (!GetState || !Switch)
+			{
+				return false;
+			}
+			Context.Track({ GetState, Switch });
+			bOk &= Connect(FindAnyPin(GetState, Variable), FindAnyPin(Switch, TEXT("Selection")), Result, TEXT("Material switch state -> Switch"));
+			bOk &= Flow.Enter(Switch, Result, TEXT("Toggle tree -> Material switch"));
+			const float CaseX = Advance();
+			for (int32 Option = 0; Option < OptionCount; ++Option)
+			{
+				UK2Node_VariableSet* SetMaterialOption = SpawnVariableSet(Graph, BaseVariable, nullptr, FVector2D(CaseX, Y + Option * 150.0f));
+				if (!SetMaterialOption)
+				{
+					return false;
+				}
+				Context.Track({ SetMaterialOption });
+				SetDefaultObject(FindAnyPin(SetMaterialOption, BaseVariable), Assets.Material(Effect.OptionMaterialPaths[Option]));
+				bOk &= Connect(FindPin(Switch, FName(*FString::FromInt(Option)), EGPD_Output), GetSchema()->FindExecutionPin(*SetMaterialOption, EGPD_Input), Result, TEXT("Material switch option -> base material"));
+				Flow.Pending.Add(GetSchema()->FindExecutionPin(*SetMaterialOption, EGPD_Output));
+				Bottom = FMath::Max(Bottom, Y + Option * 150.0f + 200.0f);
+			}
+			Flow.Pending.Add(Switch->GetDefaultPin());
+			Flow.Pending.Append(Skipped);
+		}
+
+		const TArray<FString> Parents = GetNestedTextureParents(Compiled, MaterialID);
+		for (int32 ParentIndex = 0; ParentIndex < Parents.Num(); ++ParentIndex)
+		{
+			const FString& ParentPath = Parents[ParentIndex];
+			UMaterialInterface* Parent = Assets.Material(ParentPath);
+			const FName MIDVariable = MakeNestedMIDVariable(Compiled.Name, MaterialID, ParentIndex);
+
+			// Textures belong to a material: they act only while the slot shows it.
+			UK2Node_VariableGet* GetBase = SpawnVariableGet(Graph, BaseVariable, nullptr, FVector2D(X, Y + 220.0f));
+			UK2Node_CallFunction* IsParent = SpawnCall(Graph, UKismetMathLibrary::StaticClass(), TEXT("EqualEqual_ObjectObject"), FVector2D(X + 220.0f, Y + 200.0f), Result);
+			UK2Node_IfThenElse* ParentBranch = SpawnBranch(Graph, FVector2D(Advance(520.0f), Y));
+			UK2Node_VariableGet* GetMID = SpawnVariableGet(Graph, MIDVariable, nullptr, FVector2D(X, Y + 360.0f));
+			UK2Node_CallFunction* MIDValid = SpawnCall(Graph, UKismetSystemLibrary::StaticClass(), TEXT("IsValid"), FVector2D(X + 220.0f, Y + 220.0f), Result);
+			UK2Node_IfThenElse* ValidBranch = SpawnBranch(Graph, FVector2D(Advance(520.0f), Y));
+			UK2Node_CallFunction* Create = SpawnCall(Graph, UKismetMaterialLibrary::StaticClass(), TEXT("CreateDynamicMaterialInstance"), FVector2D(X, Y + 160.0f), Result);
+			UK2Node_VariableSet* SetMID = SpawnVariableSet(Graph, MIDVariable, nullptr, FVector2D(Advance(420.0f) + 420.0f, Y + 160.0f));
+			Advance(420.0f);
+			if (!GetBase || !IsParent || !ParentBranch || !GetMID || !MIDValid || !ValidBranch || !Create || !SetMID)
+			{
+				return false;
+			}
+			Context.Track({ GetBase, IsParent, ParentBranch, GetMID, MIDValid, ValidBranch, Create, SetMID });
+			bOk &= Connect(FindAnyPin(GetBase, BaseVariable), FindAnyPin(IsParent, TEXT("A")), Result, TEXT("Slot base -> Equal"));
+			SetDefaultObject(FindAnyPin(IsParent, TEXT("B")), Parent);
+			bOk &= Connect(FindAnyPin(IsParent, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(ParentBranch, UEdGraphSchema_K2::PN_Condition), Result, TEXT("Slot shows the texture material -> Branch"));
+			bOk &= Flow.Enter(ParentBranch, Result, TEXT("Toggle tree -> texture material check"));
+			Flow.Pending.Add(FindAnyPin(ParentBranch, UEdGraphSchema_K2::PN_Then));
+			const TArray<UEdGraphPin*> OtherMaterial = { FindAnyPin(ParentBranch, UEdGraphSchema_K2::PN_Else) };
+
+			bOk &= Connect(FindAnyPin(GetMID, MIDVariable), FindAnyPin(MIDValid, TEXT("Object")), Result, TEXT("MID -> IsValid"));
+			bOk &= Connect(FindAnyPin(MIDValid, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(ValidBranch, UEdGraphSchema_K2::PN_Condition), Result, TEXT("IsValid -> Branch"));
+			bOk &= Flow.Enter(ValidBranch, Result, TEXT("Texture material -> MID check"));
+			SetDefaultObject(FindAnyPin(Create, TEXT("Parent")), Parent);
+			bOk &= Connect(FindAnyPin(ValidBranch, UEdGraphSchema_K2::PN_Else), GetSchema()->FindExecutionPin(*Create, EGPD_Input), Result, TEXT("No MID yet -> Create"));
+			bOk &= Connect(GetSchema()->FindExecutionPin(*Create, EGPD_Output), GetSchema()->FindExecutionPin(*SetMID, EGPD_Input), Result, TEXT("Create MID -> Set MID"));
+			bOk &= Connect(FindAnyPin(Create, UEdGraphSchema_K2::PN_ReturnValue), FindAnyPin(SetMID, MIDVariable), Result, TEXT("Created MID -> MID variable"));
+			Flow.Pending.Add(FindAnyPin(ValidBranch, UEdGraphSchema_K2::PN_Then));
+			Flow.Pending.Add(GetSchema()->FindExecutionPin(*SetMID, EGPD_Output));
+
+			TArray<FName> Parameters;
+			for (const FHTNestedToggleCompiledTextureEffect& Effect : Compiled.TextureEffects)
+			{
+				if (Effect.MaterialID == MaterialID && Effect.ParentMaterialPath.Equals(ParentPath, ESearchCase::IgnoreCase))
+				{
+					Parameters.AddUnique(Effect.ParameterName);
+				}
+			}
+			for (const FName Parameter : Parameters)
+			{
+				// Start from the material's own texture, then the active option overrides it.
+				UK2Node_CallFunction* Reset = SpawnCall(Graph, UMaterialInstanceDynamic::StaticClass(), TEXT("SetTextureParameterValue"), FVector2D(Advance(), Y), Result);
+				if (!Reset)
+				{
+					return false;
+				}
+				Context.Track({ Reset });
+				bOk &= Connect(FindAnyPin(GetMID, MIDVariable), FindSelfPin(Reset), Result, TEXT("MID -> reset texture"));
+				SetDefaultValue(FindAnyPin(Reset, TEXT("ParameterName")), Parameter.ToString());
+				SetDefaultObject(FindAnyPin(Reset, TEXT("Value")), Assets.ParameterDefaults.FindRef(FNestedEffectAssets::DefaultKey(ParentPath, Parameter)));
+				bOk &= Flow.Through(Reset, Result, TEXT("Texture material -> reset texture"));
+				for (const FHTNestedToggleCompiledTextureEffect& Effect : Compiled.TextureEffects)
+				{
+					if (Effect.MaterialID != MaterialID || Effect.ParameterName != Parameter || !Effect.ParentMaterialPath.Equals(ParentPath, ESearchCase::IgnoreCase))
+					{
+						continue;
+					}
+					TArray<UEdGraphPin*> Skipped;
+					bOk &= BuildNestedGate(Context, Compiled, Effect.Conditions, Flow, Skipped, FVector2D(Advance(Effect.Conditions.IsEmpty() ? 0.0f : 1060.0f), Y), Result);
+					const FName Variable = Compiled.Variables[Effect.VariableIndex].VariableName;
+					UK2Node_VariableGet* GetState = SpawnVariableGet(Graph, Variable, nullptr, FVector2D(X, Y + 220.0f));
+					UK2Node_SwitchInteger* Switch = SpawnSwitchOnInt(Graph, FVector2D(Advance(), Y), Effect.TexturePaths.Num());
+					if (!GetState || !Switch)
+					{
+						return false;
+					}
+					Context.Track({ GetState, Switch });
+					bOk &= Connect(FindAnyPin(GetState, Variable), FindAnyPin(Switch, TEXT("Selection")), Result, TEXT("Texture switch state -> Switch"));
+					bOk &= Flow.Enter(Switch, Result, TEXT("Toggle tree -> Texture switch"));
+					const float CaseX = Advance();
+					for (int32 Option = 0; Option < Effect.TexturePaths.Num(); ++Option)
+					{
+						UEdGraphPin* CasePin = FindPin(Switch, FName(*FString::FromInt(Option)), EGPD_Output);
+						if (Effect.TexturePaths[Option].IsEmpty())
+						{
+							Flow.Pending.Add(CasePin);
+							continue;
+						}
+						UK2Node_CallFunction* SetTexture = SpawnCall(Graph, UMaterialInstanceDynamic::StaticClass(), TEXT("SetTextureParameterValue"), FVector2D(CaseX, Y + Option * 170.0f), Result);
+						if (!SetTexture)
+						{
+							return false;
+						}
+						Context.Track({ SetTexture });
+						bOk &= Connect(FindAnyPin(GetMID, MIDVariable), FindSelfPin(SetTexture), Result, TEXT("MID -> option texture"));
+						SetDefaultValue(FindAnyPin(SetTexture, TEXT("ParameterName")), Parameter.ToString());
+						SetDefaultObject(FindAnyPin(SetTexture, TEXT("Value")), Assets.Texture(Effect.TexturePaths[Option]));
+						bOk &= Connect(CasePin, GetSchema()->FindExecutionPin(*SetTexture, EGPD_Input), Result, TEXT("Texture switch option -> texture"));
+						Flow.Pending.Add(GetSchema()->FindExecutionPin(*SetTexture, EGPD_Output));
+						Bottom = FMath::Max(Bottom, Y + Option * 170.0f + 260.0f);
+					}
+					Flow.Pending.Add(Switch->GetDefaultPin());
+					Flow.Pending.Append(Skipped);
+				}
+			}
+			UK2Node_VariableSet* ShowMID = SpawnVariableSet(Graph, BaseVariable, nullptr, FVector2D(Advance(), Y));
+			if (!ShowMID)
+			{
+				return false;
+			}
+			Context.Track({ ShowMID });
+			bOk &= Connect(FindAnyPin(GetMID, MIDVariable), FindAnyPin(ShowMID, BaseVariable), Result, TEXT("MID -> slot base"));
+			bOk &= Flow.Through(ShowMID, Result, TEXT("Texture material -> slot shows the MID"));
+			Flow.Pending.Append(OtherMaterial);
+		}
+
+		UK2Node_VariableGet* GetFinal = SpawnVariableGet(Graph, BaseVariable, nullptr, FVector2D(X, Y + 220.0f));
+		UK2Node_CallFunction* SetMaterial = SpawnCall(Graph, UPrimitiveComponent::StaticClass(), TEXT("SetMaterial"), FVector2D(Advance(), Y), Result);
+		if (!GetFinal || !SetMaterial)
+		{
+			return false;
+		}
+		Context.Track({ GetFinal, SetMaterial });
+		bOk &= Connect(OwningPin, FindSelfPin(SetMaterial), Result, TEXT("Owning component -> SetMaterial"));
+		SetDefaultValue(FindAnyPin(SetMaterial, TEXT("ElementIndex")), FString::FromInt(MaterialID));
+		bOk &= Connect(FindAnyPin(GetFinal, BaseVariable), FindAnyPin(SetMaterial, TEXT("Material")), Result, TEXT("Slot base -> SetMaterial"));
+		bOk &= Flow.Through(SetMaterial, Result, TEXT("Toggle tree slot -> SetMaterial"));
+		OutHeight = Bottom - Y + 200.0f;
+		return bOk;
+	}
+
+	// HTN_Apply_<Name>: Material switches, then Texture switches, then visibility: every managed
+	// material ID gets visible = AND(variable == option) over its path.
 	static bool BuildNestedApplyEvent(
 		FNestedGenerationContext& Context,
 		const FHTNestedToggleCompiledGraph& Compiled,
+		const FNestedEffectAssets& Assets,
 		const FVector2D Base,
 		float& OutHeight,
 		FHTBlueprintToggleGeneratorResult& Result)
@@ -2906,8 +3629,19 @@ namespace HTToggleGenerator
 		}
 		Context.Track({ Event, Owning });
 		UEdGraphPin* OwningPin = FindAnyPin(Owning, UEdGraphSchema_K2::PN_ReturnValue);
-		UEdGraphPin* Exec = GetSchema()->FindExecutionPin(*Event, EGPD_Output);
+		FNestedExecFlow Flow;
+		Flow.Pending.Add(GetSchema()->FindExecutionPin(*Event, EGPD_Output));
 		float RowY = Base.Y + 420.0f;
+		for (const int32 MaterialID : Compiled.EffectMaterialIDs)
+		{
+			float SlotHeight = 0.0f;
+			if (!BuildNestedEffectSlot(Context, Compiled, Assets, MaterialID, OwningPin, Flow, FVector2D(Base.X, RowY), SlotHeight, Result))
+			{
+				Result.Errors.Add(FString::Printf(TEXT("Could not build the material and texture nodes for material ID %d."), MaterialID));
+				return false;
+			}
+			RowY += SlotHeight;
+		}
 		for (const FHTNestedToggleCompiledPart& Part : Compiled.Parts)
 		{
 			TArray<UEdGraphPin*> ConditionPins;
@@ -2967,8 +3701,7 @@ namespace HTToggleGenerator
 				{
 					Connect(VisiblePin, FindAnyPin(Show, TEXT("bShow")), Result, TEXT("Toggle tree visible -> Show Material Section"));
 				}
-				Connect(Exec, GetSchema()->FindExecutionPin(*Show, EGPD_Input), Result, TEXT("Toggle tree apply chain"));
-				Exec = GetSchema()->FindExecutionPin(*Show, EGPD_Output);
+				Flow.Through(Show, Result, TEXT("Toggle tree apply chain"));
 			}
 			RowY += FMath::Max(280.0f, Part.Conditions.Num() * 170.0f + 110.0f);
 		}
@@ -3207,7 +3940,8 @@ namespace HTToggleGenerator
 			FString EmptyMask;
 			for (int32 Option = 0; Option < Switch.OptionCount; ++Option)
 			{
-				const bool bUsed = UsedOptions.Contains(TPair<int32, int32>(Index, Option));
+				// Every option of a Texture or Material switch does something: never an ON/OFF row.
+				const bool bUsed = Switch.Kind != EHTNestedToggleSwitchKind::Visibility || UsedOptions.Contains(TPair<int32, int32>(Index, Option));
 				FString OptionLabel = Switch.OptionLabels.IsValidIndex(Option) ? SanitizeNestedMetadataField(Switch.OptionLabels[Option]) : FString();
 				if (OptionLabel.IsEmpty() && bUsed)
 				{
@@ -3612,10 +4346,15 @@ FHTNestedToggleGeneratorResult FHTBlueprintToggleGenerator::GenerateNestedVisibi
 	{
 		return Result;
 	}
-	if (Compiled.Parts.IsEmpty())
+	if (Compiled.Parts.IsEmpty() && Compiled.EffectMaterialIDs.IsEmpty())
 	{
 		FHTNestedToggleIssue& Issue = Result.Errors.AddDefaulted_GetRef();
-		Issue.Message = TEXT("The toggle tree has no parts. Connect at least one part to the generate node.");
+		Issue.Message = TEXT("The toggle tree has no parts and no Texture or Material switch. Connect at least one to the generate node.");
+		return Result;
+	}
+	FNestedEffectAssets EffectAssets;
+	if (!LoadNestedEffectAssets(Params.Graph, Compiled, EffectAssets, Result.Errors))
+	{
 		return Result;
 	}
 
@@ -3677,6 +4416,27 @@ FHTNestedToggleGeneratorResult FHTBlueprintToggleGenerator::GenerateNestedVisibi
 			return Finish();
 		}
 	}
+	// Per-slot working variables of the Texture and Material switches.
+	TSet<FName> EffectVariables;
+	for (const int32 MaterialID : Compiled.EffectMaterialIDs)
+	{
+		const FName BaseVariable = MakeNestedBaseVariable(Compiled.Name, MaterialID);
+		EffectVariables.Add(BaseVariable);
+		if (!EnsureObjectVariable(AnimBlueprint, BaseVariable, UMaterialInterface::StaticClass(), Inner, FString::Printf(TEXT("Toggle tree material for slot %d"), MaterialID)))
+		{
+			return Finish();
+		}
+		const TArray<FString> Parents = GetNestedTextureParents(Compiled, MaterialID);
+		for (int32 ParentIndex = 0; ParentIndex < Parents.Num(); ++ParentIndex)
+		{
+			const FName MIDVariable = MakeNestedMIDVariable(Compiled.Name, MaterialID, ParentIndex);
+			EffectVariables.Add(MIDVariable);
+			if (!EnsureObjectVariable(AnimBlueprint, MIDVariable, UMaterialInstanceDynamic::StaticClass(), Inner, FString::Printf(TEXT("Toggle tree texture MID for slot %d"), MaterialID)))
+			{
+				return Finish();
+			}
+		}
+	}
 
 	FKismetEditorUtilities::CompileBlueprint(SaveBlueprint);
 	FKismetEditorUtilities::CompileBlueprint(AnimBlueprint);
@@ -3708,6 +4468,22 @@ FHTNestedToggleGeneratorResult FHTBlueprintToggleGenerator::GenerateNestedVisibi
 	// The tree is one managed region: replace it as a whole, never append.
 	RemoveManagedCommentGroups(Context.Graph, MakeNestedToggleMetadataPrefix(Compiled.Name));
 	RemoveCustomEventNodes(Context.Graph, Context.ApplyEvent);
+	// Slot variables of slots this tree no longer switches.
+	{
+		TArray<FName> Stale;
+		for (const FBPVariableDescription& Variable : AnimBlueprint->NewVariables)
+		{
+			if (!EffectVariables.Contains(Variable.VarName) && IsNestedEffectVariable(Compiled.Name, Variable.VarName.ToString()))
+			{
+				Stale.Add(Variable.VarName);
+			}
+		}
+		for (const FName Name : Stale)
+		{
+			FBlueprintEditorUtils::RemoveMemberVariable(AnimBlueprint, Name);
+			Inner.Messages.Add(FString::Printf(TEXT("Removed unused toggle tree variable: %s"), *Name.ToString()));
+		}
+	}
 
 	const int32 BaseY = FindNextLayoutBaseY(Context.Graph);
 	constexpr float LeftX = -1500.0f;
@@ -3723,7 +4499,7 @@ FHTNestedToggleGeneratorResult FHTBlueprintToggleGenerator::GenerateNestedVisibi
 	const float ApplyY = UpdateY + FMath::Max(1, HandlerCount) * UpdateBlockHeight + 200.0f;
 
 	float ApplyHeight = 0.0f;
-	if (!BuildNestedApplyEvent(Context, Compiled, FVector2D(LeftX, ApplyY), ApplyHeight, Inner))
+	if (!BuildNestedApplyEvent(Context, Compiled, EffectAssets, FVector2D(LeftX, ApplyY), ApplyHeight, Inner))
 	{
 		Inner.Errors.Add(TEXT("Could not create the toggle tree Apply event."));
 		return Finish();
@@ -3846,6 +4622,15 @@ FHTNestedToggleGeneratorResult FHTBlueprintToggleGenerator::GenerateNestedVisibi
 			Compiled.Variables.Num(),
 			Compiled.Parts.Num(),
 			MaterialCount));
+		if (!Compiled.EffectMaterialIDs.IsEmpty())
+		{
+			Inner.Messages.Add(FString::Printf(
+				TEXT("  Texture and Material switches act on %d slot(s): %s (%d texture and %d material effect(s))."),
+				Compiled.EffectMaterialIDs.Num(),
+				*FString::JoinBy(Compiled.EffectMaterialIDs, TEXT(", "), [](const int32 ID) { return FString::FromInt(ID); }),
+				Compiled.TextureEffects.Num(),
+				Compiled.MaterialEffects.Num()));
+		}
 		for (const FHTNestedToggleStateVariable& Variable : Compiled.Variables)
 		{
 			Inner.Messages.Add(FString::Printf(TEXT("  %s: keys %s, %d options, initial %d, slot \"%s\""),

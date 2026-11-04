@@ -6,8 +6,11 @@
 
 class UHTToggleGraphNode;
 class UHTToggleGraphNode_Group;
+class UHTToggleGraphNode_MaterialSwitch;
 class UHTToggleGraphNode_Part;
 class UHTToggleGraphNode_Switch;
+class UHTToggleGraphNode_SwitchBase;
+class UHTToggleGraphNode_TextureSwitch;
 
 // Shared layout of every toggle graph node (LoyalTools style):
 //   title bar
@@ -39,6 +42,17 @@ protected:
 	TSharedRef<SWidget> MakeTextField(const FText& Label, TAttribute<FText> Value, const FText& Hint, TFunction<void(const FString&)> OnCommit, const FText& Tooltip = FText::GetEmpty()) const;
 	// "Label:" then "[ value ][+][-]".
 	TSharedRef<SWidget> MakeCounterField(const FText& Label, TAttribute<FText> Value, TFunction<void(int32)> OnStep) const;
+	// Comment, Variable, Key, Option count and Initial option of every switch kind.
+	TSharedRef<SWidget> MakeSwitchHeader(UHTToggleGraphNode_SwitchBase* Node) const;
+	// Small text box for one option's panel label.
+	TSharedRef<SWidget> MakeOptionLabelBox(UHTToggleGraphNode_SwitchBase* Node, int32 Option) const;
+	// Asset picker (texture or material) that commits through OnPick; nullptr clears.
+	TSharedRef<SWidget> MakeAssetPicker(UClass* AllowedClass, TFunction<FString()> GetPath, TFunction<void(UObject*)> OnPick, const FText& Tooltip) const;
+	// Index of Pin among the node's dynamic inputs, INDEX_NONE otherwise.
+	int32 GetDynamicInputIndex(const UEdGraphPin* Pin) const;
+	// "Part ...: slots 3, 4" for a Target / Slots input.
+	static FText MakeConnectedPartText(const UHTToggleGraphNode_Part* Part);
+	static FText MakeInitialOptionText(const UHTToggleGraphNode_SwitchBase* Node);
 	static FSlateFontInfo FieldFont();
 };
 
@@ -56,7 +70,39 @@ protected:
 
 private:
 	UHTToggleGraphNode_Switch* GetSwitch() const;
-	FText GetInitialOptionText() const;
+};
+
+class SHTToggleGraphNode_TextureSwitch : public SHTToggleGraphNode
+{
+public:
+	SLATE_BEGIN_ARGS(SHTToggleGraphNode_TextureSwitch) {}
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs, UHTToggleGraphNode_TextureSwitch* InNode);
+
+protected:
+	virtual TSharedRef<SWidget> CreateFieldsArea() override;
+	virtual TSharedRef<SWidget> CreateInputPinExtra(UEdGraphPin* Pin) override;
+
+private:
+	UHTToggleGraphNode_TextureSwitch* GetTextureSwitch() const;
+	TSharedRef<SWidget> MakeParameterMenu() const;
+};
+
+class SHTToggleGraphNode_MaterialSwitch : public SHTToggleGraphNode
+{
+public:
+	SLATE_BEGIN_ARGS(SHTToggleGraphNode_MaterialSwitch) {}
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs, UHTToggleGraphNode_MaterialSwitch* InNode);
+
+protected:
+	virtual TSharedRef<SWidget> CreateFieldsArea() override;
+	virtual TSharedRef<SWidget> CreateInputPinExtra(UEdGraphPin* Pin) override;
+
+private:
+	UHTToggleGraphNode_MaterialSwitch* GetMaterialSwitch() const;
 };
 
 class SHTToggleGraphNode_Part : public SHTToggleGraphNode
@@ -74,6 +120,8 @@ private:
 	UHTToggleGraphNode_Part* GetPart() const;
 	TSharedRef<SWidget> MakeSlotMenu() const;
 	FText GetSlotButtonText() const;
+	TSharedRef<SWidget> MakeMaterialMenu() const;
+	FText GetMaterialButtonText() const;
 };
 
 class SHTToggleGraphNode_Group : public SHTToggleGraphNode

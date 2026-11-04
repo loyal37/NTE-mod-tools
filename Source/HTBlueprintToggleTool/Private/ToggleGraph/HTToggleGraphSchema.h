@@ -37,10 +37,14 @@ public:
 	//~ UEdGraphSchema
 	virtual void GetGraphContextActions(FGraphContextMenuBuilder& ContextMenuBuilder) const override;
 	virtual const FPinConnectionResponse CanCreateConnection(const UEdGraphPin* A, const UEdGraphPin* B) const override;
+	// A part keeps its Target / Slots links when its visibility link moves to another input.
+	virtual bool TryCreateConnection(UEdGraphPin* A, UEdGraphPin* B) const override;
 	virtual FLinearColor GetPinTypeColor(const FEdGraphPinType& PinType) const override;
 	virtual void CreateDefaultNodesForGraph(UEdGraph& Graph) const override;
 	virtual bool ShouldHidePinDefaultValue(UEdGraphPin* Pin) const override { return true; }
 
 	// True when following output links from Start reaches Target (used to refuse cycles).
 	static bool ReachesDownstream(const UEdGraphNode* Start, const UEdGraphNode* Target);
+	// Target inputs of Texture Switches and Slots inputs of Material Switches: they take parts only.
+	static bool IsEffectInput(const UEdGraphPin* Pin);
 };

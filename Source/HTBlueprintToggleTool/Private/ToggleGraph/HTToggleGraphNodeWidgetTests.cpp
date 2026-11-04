@@ -403,7 +403,7 @@ bool FHTToggleGraphNodeWidgetsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Option pin label"), Style->GetOptionPin(2)->PinFriendlyName.ToString(), FString(TEXT("Option 3")));
 	TestEqual(TEXT("Output pin label"), Style->GetOutputPin()->PinFriendlyName.ToString(), FString(TEXT("Out")));
 	TestEqual(TEXT("Group input label"), Group->GetGroupInputPin(1)->PinFriendlyName.ToString(), FString(TEXT("In 2")));
-	for (UClass* Class : { UHTToggleGraph::StaticClass(), UHTToggleGraphNode_Part::StaticClass(), UHTToggleGraphNode_Switch::StaticClass(), UHTToggleGraphNode_Group::StaticClass() })
+	for (UClass* Class : { UHTToggleGraph::StaticClass(), UHTToggleGraphNode_Part::StaticClass(), UHTToggleGraphNode_SwitchBase::StaticClass(), UHTToggleGraphNode_Switch::StaticClass(), UHTToggleGraphNode_TextureSwitch::StaticClass(), UHTToggleGraphNode_MaterialSwitch::StaticClass(), UHTToggleGraphNode_Group::StaticClass() })
 	{
 		for (TFieldIterator<FProperty> It(Class, EFieldIteratorFlags::ExcludeSuper); It; ++It)
 		{
@@ -412,7 +412,7 @@ bool FHTToggleGraphNodeWidgetsTest::RunTest(const FString& Parameters)
 	}
 	FGraphContextMenuBuilder MenuBuilder(Graph);
 	Graph->GetSchema()->GetGraphContextActions(MenuBuilder);
-	TestEqual(TEXT("Right-click menu lists the four node types"), MenuBuilder.GetNumActions(), 4);
+	TestEqual(TEXT("Right-click menu lists the six node types"), MenuBuilder.GetNumActions(), 6);
 	for (int32 Index = 0; Index < MenuBuilder.GetNumActions(); ++Index)
 	{
 		const TSharedPtr<FEdGraphSchemaAction>& Action = MenuBuilder.GetSchemaAction(Index);

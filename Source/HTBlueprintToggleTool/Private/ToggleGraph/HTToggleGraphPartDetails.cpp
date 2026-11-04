@@ -62,7 +62,7 @@ void FHTToggleGraphPartDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBui
 				SNew(SCheckBox)
 				.IsChecked_Lambda([WeakNode, SlotIndex]()
 				{
-					return WeakNode.IsValid() && WeakNode->MaterialIDs.Contains(SlotIndex) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+					return WeakNode.IsValid() && WeakNode->GetEffectiveMaterialIDs().Contains(SlotIndex) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
 				})
 				.OnCheckStateChanged_Lambda([WeakNode, SlotIndex](ECheckBoxState State)
 				{
@@ -71,17 +71,8 @@ void FHTToggleGraphPartDetails::CustomizeDetails(IDetailLayoutBuilder& DetailBui
 					{
 						return;
 					}
-					const FScopedTransaction Transaction(LOCTEXT("ToggleMaterialSlot", "Toggle Material Slot"));
-					PartNode->Modify();
-					if (State == ECheckBoxState::Checked)
-					{
-						PartNode->MaterialIDs.AddUnique(SlotIndex);
-						PartNode->MaterialIDs.Sort();
-					}
-					else
-					{
-						PartNode->MaterialIDs.Remove(SlotIndex);
-					}
+					// Same rules as the node's own slot list: picking by hand leaves By material mode.
+					PartNode->SetMaterialIDSelectedInline(SlotIndex, State == ECheckBoxState::Checked);
 					if (UEdGraph* Graph = PartNode->GetGraph())
 					{
 						Graph->NotifyGraphChanged();

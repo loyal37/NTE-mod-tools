@@ -90,16 +90,19 @@ v1.5.28 按用户要求恢复之前的倍率版实现（含 PNG 导出和单 Mip
 
 回退必须用相同 `Tuner Name` 重新生成 RGB 调节器，然后用 NTE Panel System v0.1.17 重新扫描、生成面板，并重新烘焙打包 AnimBP、BPI、WBP。倍率变量恢复为 `_Gain`，元数据不含 `Mode`；面板拒绝未回退的有模式字段调节器，避免两套算法混用。只换插件 DLL 不会修改已生成/打包的蓝图。
 
-### 嵌套切换（Toggle Tree，v1.5.29 生成器 / v1.5.30 图编辑器 / v1.5.31 节点内编辑 / v1.5.32 自动增减输入 / v1.5.33 显隐开关元数据 / v1.5.34 复制粘贴修复 / v1.5.35 面板行名用变量名）
+### 嵌套切换（Toggle Tree，v1.5.29 生成器 / v1.5.30 图编辑器 / v1.5.31 节点内编辑 / v1.5.32 自动增减输入 / v1.5.33 显隐开关元数据 / v1.5.34 复制粘贴修复 / v1.5.35 面板行名用变量名 / v1.5.36 贴图切换与材质切换节点）
 
 LoyalTools 风格的嵌套切换：外层切换的每个选项下可以再挂切换，部件可见 = 路径上所有“变量 == 选项”条件的 AND。该功能独立于 `Material visibility` 等现有模式，不改变它们的生成逻辑、`5+6;8+10` 文本语法和面板扫描。从 v1.5.31 起，这个功能的节点和界面文字全部是英文。
 
 使用方式：
 
 1. 在 `Settings` 里选好动画蓝图、SaveGame 蓝图和角色文件夹，点 `Slot Materials` 右侧的 `Open Blueprint`。插件会在动画蓝图旁边创建（或打开）`TG_<动画蓝图名>` 资产并打开图编辑器；点图的空白处，`Details` 面板显示资产属性：`Anim Blueprint`、`SaveGame Blueprint`、`Character Name`（存档槽后缀）、`Tree Name`（受管区域名）、`Save Blueprints After Compile`。
-2. 在图里右键添加节点：`Part`、`Switch`、`Group`、`Generate`。参数直接在节点上改：
+2. 在图里右键添加节点：`Part`、`Switch`、`Texture Switch`、`Material Switch`、`Group`、`Generate`。参数直接在节点上改：
    - `Switch`：`Comment`、`Variable`、`Key` 文本框（`Comment` 只是图里的备注，不会显示在游戏里；游戏面板上这一行的标题是状态变量名）；`Option count` 和 `Initial option` 用 `+`/`-` 调整，增减选项时会同步增删底部的 `Option N` 输入插口，剩下插口上的连线保留；每个 `Option N` 插口右边的小文本框是该选项的标签（面板显示用，空选项显示为 `Hidden`）。
-   - `Part`：`Comment`、`Material IDs`（如 `1, 2, 12`）；下拉按钮列出预览骨骼网格体的材质槽，勾选即加入。
+   - `Part`：`Comment`、`Material IDs`（如 `1, 2, 12`）；`By material...` 下拉列出预览网格体上的材质，选一个就自动勾选所有使用这个材质的槽，并记住这个材质（编译时按当前网格体重新查找，网格体换了材质分配也跟着变）；下面的槽列表可以手动勾选，手动改了就回到手动模式。`Part` 的 `Out` 可以连多条线：一条可见性连线（切换选项、群组或 `Generate`），外加任意多条连到 `Texture Switch` 的 `Target` 和 `Material Switch` 的 `Slots`；把它拖到另一个可见性输入时只移动可见性那条线。
+   - `Texture Switch`：头部和 `Switch` 一样（`Comment`、`Variable`、`Key`、`Option count`、`Initial option`、每个选项的标签），外加 `Parameter`（右边的下拉列出所有目标材质都有的贴图参数，也可以手填，如 `BaseColor`）。左侧 `Target N` 输入只接 `Part`，一个输入一个部件，末尾自动保留一个空输入；每个 `Target` 行显示部件的槽号和材质，并给每个选项一个贴图选择器，空的选项保留材质自己的贴图。对应主面板原来 Texture 模式里的“材质组”。
+   - `Material Switch`：头部和 `Switch` 一样；每个选项一行：标签 + 材质选择器，空的选项恢复槽的原始材质（预览网格体上的材质）。左侧 `Slots N` 输入只接 `Part`，所有部件的槽取并集。
+   - `Texture Switch` 和 `Material Switch` 的 `Out` 连到 `Generate`、`Group` 或某个 `Switch` 的选项（挂在选项下时只在该选项生效，面板上随父条件置灰）；它们没有选项插口，下面不能再挂东西。它们和 `Switch` 一样按按键/变量名共用状态变量，不同种类之间也共用（选项数和初始选项必须一致）。
    - `Group`：`Comment`。输入插口自动增减：末尾始终保留一个空的 `In N`，连上最后一个输入就会多出一个新的空输入；断开后会收缩末尾多余的空输入，只留一个；中间断开的输入会保留，其余连线的顺序不变。
    - `Generate`：树的根，输入规则和 `Group` 相同。
    所有节点内修改都可以撤销/重做，选中节点后 `Details` 面板里也能改同样的参数。
@@ -108,7 +111,7 @@ LoyalTools 风格的嵌套切换：外层切换的每个选项下可以再挂切
 4. 点工具栏 `Compile`：图先转成条件模型并校验（同按键的切换共用变量且选项数/初始选项必须一致，一个材质 ID 只能在一个部件里，按键必须可识别……），出错时在 `Result` 面板列出并选中对应节点；通过后调用生成器写入动画蓝图，默认同时保存两个蓝图。
 5. 用 NTE Panel System 重新扫描并生成面板，树的每个状态变量会成为一行。
 
-生成器入口 `FHTBlueprintToggleGenerator::GenerateNestedVisibility`（条件模型 `FHTNestedToggleGraph`：switches + parts）也可以直接调用。
+生成器入口 `FHTBlueprintToggleGenerator::GenerateNestedVisibility`（条件模型 `FHTNestedToggleGraph`：switches（`Kind` = 可见性/贴图/材质）+ parts + 槽的原始材质 `SlotMaterialPaths`）也可以直接调用。
 
 - 填了同一按键的切换共用一个状态变量（也可以直接填相同变量名），一起翻转；它们的选项数和初始选项必须相同，否则报错并指明节点。不填变量名时按按键自动命名为 `<Tree Name>_<按键>`（如 `Typhoeus_Alt_Six`）；同一组里只给一个节点填名字即可。
 - 一个 Material ID 只能出现在一条路径/一个部件里，否则报错并指明两个部件。空选项位置任意，不需要特殊表示。
@@ -116,6 +119,9 @@ LoyalTools 风格的嵌套切换：外层切换的每个选项下可以再挂切
 - 生成内容：每个状态变量一个 AnimBP int 变量 + SaveGame 变量（槽名 `<变量> <角色名>`）；`HTN_Apply_<名>` 自定义事件按 AND 条件调用 `ShowMaterialSection`，不在图里的 ID 不碰；`BlueprintUpdateAnimation` 中每个变量一段 `WasInputKeyJustPressed && WasRecentlyRendered → (var+1)%N → 保存 → Apply`，不看父条件；初始化依次读取全部存档（无存档则写初始选项，越界值 Clamp），最后 Apply 一次。
 - 整个树是一个受管区域：注释框 `HT Toggle Tree - <名>;Apply=HTN_Apply_<名>;Switch=<变量>,<按键>,<选项数>,<父变量>,<父选项>,<标签>,<选项标签|…>,<空选项位>`（`<标签>` 从 v1.5.35 起写状态变量名，不再来自 `Comment`；无父时父变量为空、父选项 -1；未命名的空选项标签为空，供面板显示 `Hidden`；`<空选项位>` 每个选项一位，`1` 表示该选项下没有部件也没有子切换，面板据此把“两个选项、恰好一个为空”的切换显示成 `ON/OFF` 开关）。按名整体替换，不追加。
 - v1.5.30 建的图里旧的中文插口名（如 `输入`、`物体`）在打开或加载时自动刷新为英文，连线不变。
+- 贴图/材质切换（v1.5.36）：同一个 `HTN_Apply_<名>` 里先算材质、再算贴图、最后算可见性，所以一个材质 ID 可以同时被显隐、贴图切换和材质切换作用。只有被贴图/材质切换作用的槽会被 `SetMaterial`，其他槽不碰；每个这样的槽：先取原始材质（编译时从预览网格体读出），生效的 `Material Switch` 把它换成当前选项的材质；然后对每个贴图材质（`Part` 的 `By material` 材质，手动模式时是槽的原始材质），只有槽当前正是这个材质时，才在这个槽自己的 MID（首次需要时用 `CreateDynamicMaterialInstance` 创建，之后复用）上先把参数设回材质自己的贴图，再设当前选项的贴图，最后 `SetMaterial(槽, MID)`；否则 `SetMaterial(槽, 当前材质)`。槽的工作变量是 `HTN_<名>_Base<槽>` 和 `HTN_<名>_MID<槽>_<序号>`，不再使用的会在重新编译时删除。
+- 冲突检查：同一个槽被两个可能同时生效的 `Material Switch` 作用、或同一个槽的同一个参数被两个可能同时生效的 `Texture Switch` 作用（同一个材质）时编译报错并选中节点；如果两者挂在同一个变量的不同选项下（互斥），则允许。参数不在目标材质上、贴图或材质加载失败、槽在预览网格体上没有材质时也报错。和原有非图切换重复控制同一个 ID 不做检查。
+- 面板：贴图/材质切换的选项都算“有内容”（`<空选项位>` 全为 0），面板一律显示循环按钮，标题是变量名，未填的选项标签显示编号。
 
 示例：
 

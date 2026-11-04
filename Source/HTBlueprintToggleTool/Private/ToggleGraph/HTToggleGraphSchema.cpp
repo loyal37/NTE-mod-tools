@@ -42,11 +42,19 @@ void UHTToggleGraphSchema::GetGraphContextActions(FGraphContextMenuBuilder& Cont
 	ContextMenuBuilder.AddAction(MakeShared<FHTToggleGraphSchemaAction_NewNode>(
 		UHTToggleGraphNode_Part::StaticClass(),
 		LOCTEXT("AddPart", "Part"),
-		LOCTEXT("AddPartTooltip", "Material IDs that show together. Connect its output to a switch option, a group or the generate node.")));
+		LOCTEXT("AddPartTooltip", "Material IDs that show together. Connect its output to a switch option, a group or the generate node, and to any number of Texture Switch targets and Material Switch slots.")));
 	ContextMenuBuilder.AddAction(MakeShared<FHTToggleGraphSchemaAction_NewNode>(
 		UHTToggleGraphNode_Switch::StaticClass(),
 		LOCTEXT("AddSwitch", "Switch"),
 		LOCTEXT("AddSwitchTooltip", "A key-driven switch. Parts or other switches hang on its options; its output hangs on a parent option, a group or the generate node.")));
+	ContextMenuBuilder.AddAction(MakeShared<FHTToggleGraphSchemaAction_NewNode>(
+		UHTToggleGraphNode_TextureSwitch::StaticClass(),
+		LOCTEXT("AddTextureSwitch", "Texture Switch"),
+		LOCTEXT("AddTextureSwitchTooltip", "A key-driven switch that sets one texture parameter on the slots of its Target parts, one texture per option. Its output hangs on a switch option, a group or the generate node.")));
+	ContextMenuBuilder.AddAction(MakeShared<FHTToggleGraphSchemaAction_NewNode>(
+		UHTToggleGraphNode_MaterialSwitch::StaticClass(),
+		LOCTEXT("AddMaterialSwitch", "Material Switch"),
+		LOCTEXT("AddMaterialSwitchTooltip", "A key-driven switch that puts one material per option on the slots of its parts. Empty options restore the original material.")));
 	ContextMenuBuilder.AddAction(MakeShared<FHTToggleGraphSchemaAction_NewNode>(
 		UHTToggleGraphNode_Group::StaticClass(),
 		LOCTEXT("AddGroup", "Group"),
@@ -90,6 +98,13 @@ bool UHTToggleGraphSchema::ReachesDownstream(const UEdGraphNode* Start, const UE
 	return false;
 }
 
+bool UHTToggleGraphSchema::IsEffectInput(const UEdGraphPin* Pin)
+{
+	const UEdGraphNode* Owner = Pin ? Pin->GetOwningNodeUnchecked() : nullptr;
+	return Pin && Pin->Direction == EGPD_Input && Owner
+		&& (Owner->IsA<UHTToggleGraphNode_TextureSwitch>() || Owner->IsA<UHTToggleGraphNode_MaterialSwitch>());
+}
+
 const FPinConnectionResponse UHTToggleGraphSchema::CanCreateConnection(const UEdGraphPin* A, const UEdGraphPin* B) const
 {
 	if (!A || !B || A->GetOwningNode() == B->GetOwningNode())
@@ -111,12 +126,58 @@ const FPinConnectionResponse UHTToggleGraphSchema::CanCreateConnection(const UEd
 	{
 		return FPinConnectionResponse(CONNECT_RESPONSE_DISALLOW, LOCTEXT("Cycle", "This connection would form a loop."));
 	}
-	// A part or switch can hang on one place only; replacing the old link keeps one path per part.
+	const bool bFromPart = Output->GetOwningNode()->IsA<UHTToggleGraphNode_Part>();
+	if (IsEffectInput(Input))
+	{
+		if (!bFromPart)
+		{
+			return FPinConnectionResponse(CONNECT_RESPONSE_DISALLOW, LOCTEXT("PartsOnly", "Only parts connect to Target and Slots inputs."));
+		}
+		// One part per input; a part can still feed any number of other inputs.
+		if (!Input->LinkedTo.IsEmpty())
+		{
+			return FPinConnectionResponse(A == Input ? CONNECT_RESPONSE_BREAK_OTHERS_A : CONNECT_RESPONSE_BREAK_OTHERS_B, LOCTEXT("ReplaceTarget", "Replace the part on this input."));
+		}
+		return FPinConnectionResponse(CONNECT_RESPONSE_MAKE, FText::GetEmpty());
+	}
+	if (bFromPart)
+	{
+		// A part shows through one path only: TryCreateConnection moves its visibility link and
+		// keeps its Target / Slots links.
+		for (const UEdGraphPin* Linked : Output->LinkedTo)
+		{
+			if (Linked && !IsEffectInput(Linked))
+			{
+				return FPinConnectionResponse(CONNECT_RESPONSE_MAKE, LOCTEXT("MoveVisibility", "Move the part's visibility connection here."));
+			}
+		}
+		return FPinConnectionResponse(CONNECT_RESPONSE_MAKE, FText::GetEmpty());
+	}
+	// A switch or group can hang on one place only; replacing the old link keeps one path.
 	if (!Output->LinkedTo.IsEmpty())
 	{
 		return FPinConnectionResponse(A == Output ? CONNECT_RESPONSE_BREAK_OTHERS_A : CONNECT_RESPONSE_BREAK_OTHERS_B, LOCTEXT("ReplaceParent", "Replace the existing connection."));
 	}
 	return FPinConnectionResponse(CONNECT_RESPONSE_MAKE, FText::GetEmpty());
+}
+
+bool UHTToggleGraphSchema::TryCreateConnection(UEdGraphPin* A, UEdGraphPin* B) const
+{
+	UEdGraphPin* Output = A && A->Direction == EGPD_Output ? A : B;
+	UEdGraphPin* Input = Output == A ? B : A;
+	if (Output && Input && Output != Input && Output->GetOwningNodeUnchecked() && Output->GetOwningNode()->IsA<UHTToggleGraphNode_Part>()
+		&& !IsEffectInput(Input) && CanCreateConnection(A, B).Response == CONNECT_RESPONSE_MAKE)
+	{
+		const TArray<UEdGraphPin*> Links = Output->LinkedTo;
+		for (UEdGraphPin* Linked : Links)
+		{
+			if (Linked && Linked != Input && !IsEffectInput(Linked))
+			{
+				BreakSinglePinLink(Output, Linked);
+			}
+		}
+	}
+	return Super::TryCreateConnection(A, B);
 }
 
 FLinearColor UHTToggleGraphSchema::GetPinTypeColor(const FEdGraphPinType& PinType) const
