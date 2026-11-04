@@ -38,6 +38,10 @@ An Unreal Engine 5.6 editor plugin that generates character material toggle Blue
 
 The release archive only contains the files the UE 5.6 Win64 editor needs to run the plugin; it has no `Source` and no PDB. Building from source requires the Visual Studio 2022 C++ toolchain.
 
+### Versions
+
+Since v1.6.0 every update adds one to the last number and carries at ten: 1.6.0, 1.6.1, ... 1.6.9, 1.7.0. The version is shown in the editor's Plugins window and in the archive name.
+
 ## Blueprint toggles
 
 In `Settings`, choose the Animation Blueprint, the SaveGame Blueprint and the character folder. The choices are saved in the project configuration and are still there after closing and reopening the tool. When the character folder changes, the tool looks for the AnimBP and SaveGame Blueprint in that folder and fills in the paths above. The character folder is also where the tool looks for the character's materials.

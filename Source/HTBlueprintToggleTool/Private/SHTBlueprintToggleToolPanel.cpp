@@ -1,3 +1,5 @@
+// The main HT Blueprint Toggle Tool window: settings, Function Switch modes, slot analysis and generation.
+
 #include "SHTBlueprintToggleToolPanel.h"
 
 #include "Editor.h"

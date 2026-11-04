@@ -1,3 +1,5 @@
+// Automation tests for the Material ID(s) syntax and the material group cycle Blueprint.
+
 #include "HTBlueprintToggleGenerator.h"
 #include "HTMaterialVisibilityInput.h"
 

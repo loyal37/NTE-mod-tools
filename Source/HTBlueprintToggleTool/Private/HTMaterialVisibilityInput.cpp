@@ -1,3 +1,5 @@
+// Parses the Material ID(s) syntax of the visibility mode: "5+6;8+10" group cycles and "5+6,8" cycles with hide all.
+
 #include "HTMaterialVisibilityInput.h"
 
 namespace HTMaterialVisibilityInput

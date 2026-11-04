@@ -6,6 +6,8 @@
 	"Description": "Editor tools for generating Blueprint toggles, assigning skeletal mesh slot materials, building four-texture material instances, and exporting selected cooked assets.",
 	"Category": "HT",
 	"CreatedBy": "loyal37",
+	"CreatedByURL": "https://github.com/loyal37",
+	"DocsURL": "https://github.com/loyal37/NTE-mod-tools#readme",
 	"EnabledByDefault": false,
 	"CanContainContent": false,
 	"Modules": [

@@ -1,3 +1,5 @@
+// Blueprint generation for every toggle mode (visibility, texture, material, RGB tuner) and the toggle tree.
+
 #include "HTBlueprintToggleGenerator.h"
 
 #include "Algo/Unique.h"

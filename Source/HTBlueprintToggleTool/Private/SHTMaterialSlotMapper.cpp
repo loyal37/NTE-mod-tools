@@ -1,3 +1,5 @@
+// Slot Materials window: lists the preview mesh slots and assigns the character folder materials to them.
+
 #include "SHTMaterialSlotMapper.h"
 
 #include "Animation/AnimBlueprint.h"
