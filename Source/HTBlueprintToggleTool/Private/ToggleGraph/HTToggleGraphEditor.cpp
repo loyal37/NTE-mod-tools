@@ -309,6 +309,12 @@ void FHTToggleGraphEditor::ExtendToolbar()
 				LOCTEXT("CompileButton", "Compile"),
 				LOCTEXT("CompileTooltip", "Convert the tree into Animation Blueprint nodes (replaces the previous tree of the same name)."),
 				FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Refresh"));
+			Builder.AddToolBarButton(
+				FUIAction(FExecuteAction::CreateSP(this, &FHTToggleGraphEditor::RefreshPartSlots)),
+				NAME_None,
+				LOCTEXT("RefreshButton", "Refresh"),
+				LOCTEXT("RefreshTooltip", "Look every Part's slot names up on the preview mesh and move Material IDs that are out of date (after slots were added or removed) back onto their slots. Parts made before slot names were recorded are bound to the slots their IDs point at now. Lists every change in the Result tab; undo restores the old IDs."),
+				FSlateIcon(FAppStyle::GetAppStyleSetName(), "Icons.Search"));
 			Builder.EndSection();
 		}));
 	AddToolbarExtender(Extender);
@@ -362,37 +368,69 @@ void FHTToggleGraphEditor::Compile()
 		return;
 	}
 	const FHTNestedToggleGeneratorResult Result = FHTToggleGraphCompiler::Generate(Asset, Asset->bSaveBlueprintsAfterCompile);
-	FString Text = Result.ToDisplayString();
 	// Node ids are readable but the editor can also select the nodes behind the first error.
-	if (!Result.bSuccess && GraphEditor.IsValid())
+	if (!Result.bSuccess)
 	{
-		GraphEditor->ClearSelectionSet();
-		UEdGraphNode* FirstNode = nullptr;
-		for (const FHTNestedToggleIssue& Issue : Result.Errors)
+		SelectIssueNodes(Result.Errors);
+	}
+	SetResultText(Result.ToDisplayString(), !Result.bSuccess);
+	Notify(Result.bSuccess
+		? LOCTEXT("CompileSucceeded", "HT toggle tree generated.")
+		: LOCTEXT("CompileFailed", "HT toggle tree compile failed. See the result tab."), Result.bSuccess);
+}
+
+void FHTToggleGraphEditor::RefreshPartSlots()
+{
+	if (!Asset)
+	{
+		return;
+	}
+	const FHTPartSlotReport Report = FHTToggleGraphCompiler::RefreshPartSlots(Asset);
+	if (!Report.Errors.IsEmpty())
+	{
+		SelectIssueNodes(Report.Errors);
+	}
+	SetResultText(Report.ToDisplayString(), !Report.Errors.IsEmpty());
+	Notify(!Report.Errors.IsEmpty()
+		? LOCTEXT("RefreshProblems", "Some Part slots could not be found. See the result tab.")
+		: Report.ChangedParts > 0
+			? FText::Format(LOCTEXT("RefreshChanged", "Refresh updated {0} part(s). See the result tab."), Report.ChangedParts)
+			: LOCTEXT("RefreshUnchanged", "Every Part's Material IDs are up to date."),
+		Report.Errors.IsEmpty());
+}
+
+void FHTToggleGraphEditor::SelectIssueNodes(const TArray<FHTNestedToggleIssue>& Issues)
+{
+	if (!GraphEditor.IsValid())
+	{
+		return;
+	}
+	GraphEditor->ClearSelectionSet();
+	UEdGraphNode* FirstNode = nullptr;
+	for (const FHTNestedToggleIssue& Issue : Issues)
+	{
+		for (const FString& NodeId : Issue.NodeIds)
 		{
-			for (const FString& NodeId : Issue.NodeIds)
+			if (UEdGraphNode* Node = FHTToggleGraphCompiler::FindNodeById(Asset, NodeId))
 			{
-				if (UEdGraphNode* Node = FHTToggleGraphCompiler::FindNodeById(Asset, NodeId))
-				{
-					GraphEditor->SetNodeSelection(Node, true);
-					FirstNode = FirstNode ? FirstNode : Node;
-				}
+				GraphEditor->SetNodeSelection(Node, true);
+				FirstNode = FirstNode ? FirstNode : Node;
 			}
 		}
-		if (FirstNode)
-		{
-			GraphEditor->JumpToNode(FirstNode, false, false);
-		}
 	}
-	SetResultText(Text, !Result.bSuccess);
+	if (FirstNode)
+	{
+		GraphEditor->JumpToNode(FirstNode, false, false);
+	}
+}
 
-	FNotificationInfo Info(Result.bSuccess
-		? LOCTEXT("CompileSucceeded", "HT toggle tree generated.")
-		: LOCTEXT("CompileFailed", "HT toggle tree compile failed. See the result tab."));
-	Info.ExpireDuration = Result.bSuccess ? 4.0f : 8.0f;
+void FHTToggleGraphEditor::Notify(const FText& Message, const bool bSuccess)
+{
+	FNotificationInfo Info(Message);
+	Info.ExpireDuration = bSuccess ? 4.0f : 8.0f;
 	if (const TSharedPtr<SNotificationItem> Notification = FSlateNotificationManager::Get().AddNotification(Info))
 	{
-		Notification->SetCompletionState(Result.bSuccess ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail);
+		Notification->SetCompletionState(bSuccess ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail);
 	}
 }
 

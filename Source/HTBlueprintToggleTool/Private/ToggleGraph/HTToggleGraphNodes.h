@@ -132,6 +132,18 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Part", meta = (DisplayName = "By Material"))
 	TSoftObjectPtr<UMaterialInterface> SourceMaterial;
 
+	// The preview mesh's material slot name of each Material ID (same order; None where unknown),
+	// recorded whenever the IDs are picked. Slot names survive slots being inserted or removed,
+	// so Refresh can move every ID back onto its slot; Compile refuses IDs that moved.
+	UPROPERTY(VisibleAnywhere, Category = "Part", meta = (DisplayName = "Slot Names"))
+	TArray<FName> SlotNames;
+
+	// Records the slot name of every Material ID from the preview mesh (None without a mesh).
+	void BindSlotNames();
+	// "sleeve, body" for the node; unknown names show as "?".
+	FString GetSlotNamesText() const;
+	bool HasSlotNames() const;
+
 	bool SetMaterialIDsInline(const TArray<int32>& NewMaterialIDs);
 	bool SetMaterialIDSelectedInline(int32 MaterialID, bool bSelected);
 	// Picks every preview mesh slot that uses Material and remembers it; nullptr = manual mode.

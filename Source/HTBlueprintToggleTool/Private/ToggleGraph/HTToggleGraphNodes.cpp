@@ -597,6 +597,33 @@ TArray<int32> UHTToggleGraphNode_Part::GetEffectiveMaterialIDs(bool* bOutMeshMis
 	return FindSlotsUsingMaterial(Mesh, SourceMaterial.LoadSynchronous());
 }
 
+void UHTToggleGraphNode_Part::BindSlotNames()
+{
+	const UHTToggleGraph* Asset = GetToggleGraphAsset();
+	const USkeletalMesh* Mesh = Asset ? Asset->ResolvePreviewMesh() : nullptr;
+	SlotNames.Reset(MaterialIDs.Num());
+	for (const int32 ID : MaterialIDs)
+	{
+		SlotNames.Add(Mesh && Mesh->GetMaterials().IsValidIndex(ID) ? Mesh->GetMaterials()[ID].MaterialSlotName : NAME_None);
+	}
+}
+
+FString UHTToggleGraphNode_Part::GetSlotNamesText() const
+{
+	TArray<FString> Names;
+	for (int32 Index = 0; Index < MaterialIDs.Num(); ++Index)
+	{
+		const FName Name = SlotNames.IsValidIndex(Index) ? SlotNames[Index] : NAME_None;
+		Names.Add(Name.IsNone() ? FString(TEXT("?")) : Name.ToString());
+	}
+	return FString::Join(Names, TEXT(", "));
+}
+
+bool UHTToggleGraphNode_Part::HasSlotNames() const
+{
+	return SlotNames.ContainsByPredicate([](const FName Name) { return !Name.IsNone(); });
+}
+
 FString UHTToggleGraphNode_Part::GetMaterialIDsText() const
 {
 	return FString::JoinBy(GetEffectiveMaterialIDs(), TEXT(", "), [](const int32 ID) { return FString::FromInt(ID); });
@@ -644,6 +671,7 @@ bool UHTToggleGraphNode_Part::SetMaterialIDsInline(const TArray<int32>& NewMater
 	Modify();
 	MaterialIDs = MoveTemp(Sorted);
 	SourceMaterial.Reset();
+	BindSlotNames();
 	return true;
 }
 
@@ -673,6 +701,7 @@ bool UHTToggleGraphNode_Part::SetSourceMaterialInline(UMaterialInterface* Materi
 	Modify();
 	SourceMaterial = Material;
 	MaterialIDs = MoveTemp(Slots);
+	BindSlotNames();
 	return true;
 }
 
@@ -685,10 +714,12 @@ void UHTToggleGraphNode_Part::PostEditChangeProperty(FPropertyChangedEvent& Prop
 		{
 			const UHTToggleGraph* Asset = GetToggleGraphAsset();
 			MaterialIDs = FindSlotsUsingMaterial(Asset ? Asset->ResolvePreviewMesh() : nullptr, SourceMaterial.LoadSynchronous());
+			BindSlotNames();
 		}
 		else if (Changed->GetFName() == GET_MEMBER_NAME_CHECKED(UHTToggleGraphNode_Part, MaterialIDs))
 		{
 			SourceMaterial.Reset();
+			BindSlotNames();
 		}
 	}
 	Super::PostEditChangeProperty(PropertyChangedEvent);
@@ -772,6 +803,7 @@ UHTToggleGraphNode_Part* UHTToggleGraphNode_SwitchBase::AddPartFromMaterial(UMat
 	Part->Label = Material->GetName();
 	Part->SourceMaterial = Material;
 	Part->MaterialIDs = MoveTemp(Slots);
+	Part->BindSlotNames();
 	Graph->GetSchema()->TryCreateConnection(Part->GetOutputPin(), GetDynamicInputPin(FreeInput));
 	Graph->NotifyGraphChanged();
 	return Part;

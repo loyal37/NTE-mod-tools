@@ -11,6 +11,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/Texture.h"
 #include "Materials/MaterialInterface.h"
+#include "ScopedTransaction.h"
 
 namespace HTToggleGraphCompiler
 {
@@ -89,6 +90,218 @@ namespace HTToggleGraphCompiler
 	{
 		return Object ? Object->GetPathName() : FString();
 	}
+
+	struct FPartSlotPlan
+	{
+		UHTToggleGraphNode_Part* Part = nullptr;
+		TArray<int32> IDs;
+		TArray<FName> Names;
+	};
+
+	static FString JoinIDs(const TArray<int32>& IDs)
+	{
+		return FString::JoinBy(IDs, TEXT(", "), [](const int32 ID) { return FString::FromInt(ID); });
+	}
+
+	// Looks every Part's slot names up on the preview mesh. For Refresh (bApply) the plans hold the
+	// new IDs and names of the parts that change; for Compile an ID that moved is an error.
+	static FHTPartSlotReport PlanPartSlots(const UHTToggleGraph* Asset, const bool bApply, TArray<FPartSlotPlan>& OutPlans)
+	{
+		FHTPartSlotReport Report;
+		auto AddError = [&Report](const FString& NodeId, const FString& Message)
+		{
+			FHTNestedToggleIssue& Issue = Report.Errors.AddDefaulted_GetRef();
+			if (!NodeId.IsEmpty())
+			{
+				Issue.NodeIds.Add(NodeId);
+			}
+			Issue.Message = Message;
+		};
+		const USkeletalMesh* Mesh = Asset ? Asset->ResolvePreviewMesh() : nullptr;
+		if (!Asset || !Asset->Graph || !Mesh)
+		{
+			if (bApply)
+			{
+				AddError(FString(), TEXT("Refresh needs the Anim Blueprint's preview mesh to look the slot names up. Set a preview mesh on the Anim Blueprint."));
+			}
+			return Report;
+		}
+		const TArray<FSkeletalMaterial>& Materials = Mesh->GetMaterials();
+		for (UEdGraphNode* Node : Asset->Graph->Nodes)
+		{
+			UHTToggleGraphNode_Part* Part = Cast<UHTToggleGraphNode_Part>(Node);
+			if (!Part)
+			{
+				continue;
+			}
+			const FString Id = Part->GetNodeId();
+			FPartSlotPlan Plan;
+			Plan.Part = Part;
+			Plan.IDs = Part->MaterialIDs;
+			Plan.Names = Part->SlotNames;
+			Plan.Names.SetNum(Plan.IDs.Num());
+			if (!Part->SourceMaterial.IsNull())
+			{
+				// By material parts look their slots up again on every compile.
+				if (!bApply)
+				{
+					continue;
+				}
+				const TArray<int32> Slots = UHTToggleGraphNode_Part::FindSlotsUsingMaterial(Mesh, Part->SourceMaterial.LoadSynchronous());
+				if (Slots.IsEmpty())
+				{
+					AddError(Id, FString::Printf(TEXT("%s picks slots by material %s, but the preview mesh no longer uses it."), *Id, *Part->SourceMaterial.GetAssetName()));
+					continue;
+				}
+				TArray<FName> Names;
+				for (const int32 Slot : Slots)
+				{
+					Names.Add(Materials[Slot].MaterialSlotName);
+				}
+				if (Slots != Plan.IDs)
+				{
+					Report.Changes.Add(FString::Printf(TEXT("%s: IDs %s -> %s (material %s)"), *Id, *JoinIDs(Plan.IDs), *JoinIDs(Slots), *Part->SourceMaterial.GetAssetName()));
+				}
+				if (Slots != Plan.IDs || Names != Plan.Names)
+				{
+					Plan.IDs = Slots;
+					Plan.Names = MoveTemp(Names);
+					OutPlans.Add(MoveTemp(Plan));
+				}
+				continue;
+			}
+			bool bChanged = false;
+			for (int32 Index = 0; Index < Plan.IDs.Num(); ++Index)
+			{
+				const int32 ID = Plan.IDs[Index];
+				const FName Name = Plan.Names[Index];
+				if (Name.IsNone())
+				{
+					if (!Materials.IsValidIndex(ID))
+					{
+						if (bApply)
+						{
+							AddError(Id, FString::Printf(TEXT("%s: ID %d is not a slot of the preview mesh, which has %d slots. Pick the part's slots again."), *Id, ID, Materials.Num()));
+						}
+						continue;
+					}
+					Report.Bindings.Add(FString::Printf(TEXT("%s: ID %d -> slot %s"), *Id, ID, *Materials[ID].MaterialSlotName.ToString()));
+					if (bApply)
+					{
+						Plan.Names[Index] = Materials[ID].MaterialSlotName;
+						bChanged = true;
+					}
+					continue;
+				}
+				if (Materials.IsValidIndex(ID) && Materials[ID].MaterialSlotName == Name)
+				{
+					continue; // Still on its slot.
+				}
+				int32 Found = INDEX_NONE;
+				int32 Count = 0;
+				for (int32 Slot = 0; Slot < Materials.Num(); ++Slot)
+				{
+					if (Materials[Slot].MaterialSlotName == Name)
+					{
+						Found = Count++ == 0 ? Slot : Found;
+					}
+				}
+				if (Count == 0)
+				{
+					AddError(Id, FString::Printf(TEXT("%s: slot %s (ID %d) is no longer on the preview mesh. Pick the part's slots again."), *Id, *Name.ToString(), ID));
+				}
+				else if (Count > 1)
+				{
+					AddError(Id, FString::Printf(TEXT("%s: the preview mesh has %d slots named %s (ID %d). Give the mesh slots unique names or pick the part's slots again."), *Id, Count, *Name.ToString(), ID));
+				}
+				else if (Found != ID)
+				{
+					if (bApply)
+					{
+						Report.Changes.Add(FString::Printf(TEXT("%s: ID %d -> %d (slot %s)"), *Id, ID, Found, *Name.ToString()));
+						Plan.IDs[Index] = Found;
+						bChanged = true;
+					}
+					else
+					{
+						AddError(Id, FString::Printf(TEXT("%s: slot %s moved from ID %d to %d on the preview mesh."), *Id, *Name.ToString(), ID, Found));
+					}
+				}
+			}
+			if (bChanged)
+			{
+				// Keep the IDs sorted and unique, each with its name.
+				TArray<TPair<int32, FName>> Pairs;
+				for (int32 Index = 0; Index < Plan.IDs.Num(); ++Index)
+				{
+					if (!Pairs.ContainsByPredicate([&](const TPair<int32, FName>& Pair) { return Pair.Key == Plan.IDs[Index]; }))
+					{
+						Pairs.Emplace(Plan.IDs[Index], Plan.Names[Index]);
+					}
+				}
+				Pairs.Sort([](const TPair<int32, FName>& A, const TPair<int32, FName>& B) { return A.Key < B.Key; });
+				Plan.IDs.Reset();
+				Plan.Names.Reset();
+				for (const TPair<int32, FName>& Pair : Pairs)
+				{
+					Plan.IDs.Add(Pair.Key);
+					Plan.Names.Add(Pair.Value);
+				}
+				OutPlans.Add(MoveTemp(Plan));
+			}
+		}
+		return Report;
+	}
+}
+
+FString FHTPartSlotReport::ToDisplayString() const
+{
+	TArray<FString> Lines;
+	for (const FHTNestedToggleIssue& Issue : Errors)
+	{
+		Lines.Add(Issue.ToDisplayString());
+	}
+	Lines.Append(Changes);
+	if (!Bindings.IsEmpty())
+	{
+		Lines.Add(TEXT("Bound to slot names (check that each is the slot you meant):"));
+		Lines.Append(Bindings);
+	}
+	if (Lines.IsEmpty())
+	{
+		Lines.Add(TEXT("Every Part's Material IDs match their slots on the preview mesh."));
+	}
+	else if (Errors.IsEmpty())
+	{
+		Lines.Add(FString::Printf(TEXT("Refresh updated %d part(s). Compile to apply them to the Animation Blueprint."), ChangedParts));
+	}
+	return FString::Join(Lines, TEXT("\n"));
+}
+
+FHTPartSlotReport FHTToggleGraphCompiler::CheckPartSlots(const UHTToggleGraph* Asset)
+{
+	TArray<HTToggleGraphCompiler::FPartSlotPlan> Plans;
+	return HTToggleGraphCompiler::PlanPartSlots(Asset, false, Plans);
+}
+
+FHTPartSlotReport FHTToggleGraphCompiler::RefreshPartSlots(UHTToggleGraph* Asset)
+{
+	TArray<HTToggleGraphCompiler::FPartSlotPlan> Plans;
+	FHTPartSlotReport Report = HTToggleGraphCompiler::PlanPartSlots(Asset, true, Plans);
+	if (!Plans.IsEmpty())
+	{
+		const FScopedTransaction Transaction(NSLOCTEXT("HTToggleGraphCompiler", "RefreshPartSlots", "Refresh Part Material IDs"));
+		for (const HTToggleGraphCompiler::FPartSlotPlan& Plan : Plans)
+		{
+			Plan.Part->Modify();
+			Plan.Part->MaterialIDs = Plan.IDs;
+			Plan.Part->SlotNames = Plan.Names;
+		}
+		Asset->MarkPackageDirty();
+		Asset->Graph->NotifyGraphChanged();
+	}
+	Report.ChangedParts = Plans.Num();
+	return Report;
 }
 
 bool FHTToggleGraphCompiler::CompileToModel(const UHTToggleGraph* Asset, FHTNestedToggleGraph& OutModel, TArray<FHTNestedToggleIssue>& OutErrors, TArray<FString>& OutWarnings)
@@ -290,6 +503,19 @@ FHTNestedToggleGeneratorResult FHTToggleGraphCompiler::Generate(UHTToggleGraph* 
 {
 	FHTNestedToggleGeneratorResult Result;
 	TArray<FString> Warnings;
+	// Material IDs are slot indices; slots added or removed on the mesh shift them silently.
+	const FHTPartSlotReport Slots = CheckPartSlots(Asset);
+	if (!Slots.Errors.IsEmpty())
+	{
+		Result.Errors = Slots.Errors;
+		FHTNestedToggleIssue& Hint = Result.Errors.AddDefaulted_GetRef();
+		Hint.Message = TEXT("Nothing was generated. Press Refresh to move the Material IDs back onto their slots (or fix the slots listed above), then Compile again.");
+		return Result;
+	}
+	if (!Slots.Bindings.IsEmpty())
+	{
+		Warnings.Add(FString::Printf(TEXT("%d Material ID(s) are not bound to slot names yet. Press Refresh once to bind them, so later slot changes on the mesh can be followed."), Slots.Bindings.Num()));
+	}
 	FHTNestedToggleGeneratorParams Params;
 	if (!CompileToModel(Asset, Params.Graph, Result.Errors, Warnings))
 	{

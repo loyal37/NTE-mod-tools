@@ -34,6 +34,7 @@ private:
 
 class STextBlock;
 class UHTToggleGraph;
+struct FHTNestedToggleIssue;
 
 // Asset editor for UHTToggleGraph: graph canvas, details of the selected nodes (or the asset),
 // a result panel, and a toolbar "Compile" button that generates the Animation Blueprint nodes.
@@ -62,6 +63,9 @@ public:
 
 	// Runs the compiler and reports into the result tab; selects offending nodes on error.
 	void Compile();
+	// Moves every Part's Material IDs back onto their slot names on the preview mesh and lists the
+	// changes in the result tab; selects the parts whose slots could not be found.
+	void RefreshPartSlots();
 
 	// Clipboard paths shared by Copy, Cut, Paste and Duplicate (and the automation tests, which
 	// must not touch the system clipboard). Text uses the engine's node export format.
@@ -85,6 +89,8 @@ private:
 	void OnSelectedNodesChanged(const TSet<UObject*>& Selection);
 	void OnNodeDoubleClicked(UEdGraphNode* Node);
 	void SetResultText(const FString& Text, bool bError);
+	void SelectIssueNodes(const TArray<FHTNestedToggleIssue>& Issues);
+	void Notify(const FText& Message, bool bSuccess);
 
 	FGraphPanelSelectionSet GetSelectedNodes() const;
 	void SelectAllNodes();

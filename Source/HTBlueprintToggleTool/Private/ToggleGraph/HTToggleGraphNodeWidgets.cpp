@@ -896,6 +896,22 @@ TSharedRef<SWidget> SHTToggleGraphNode_Part::CreateFieldsArea()
 			SNew(STextBlock)
 			.Font(FieldFont())
 			.ColorAndOpacity(FLinearColor(1.0f, 1.0f, 1.0f, 0.78f))
+			.Visibility_Lambda([WeakNode]() { return WeakNode.IsValid() && WeakNode->HasSlotNames() ? EVisibility::Visible : EVisibility::Collapsed; })
+			.Text_Lambda([WeakNode]()
+			{
+				return WeakNode.IsValid()
+					? FText::Format(LOCTEXT("SlotNames", "Slots: {0}"), FText::FromString(WeakNode->GetSlotNamesText()))
+					: FText::GetEmpty();
+			})
+			.ToolTipText(LOCTEXT("SlotNamesTooltip", "The preview mesh's slot name of each Material ID. If slots are added or removed on the mesh, press Refresh to move the IDs back onto these slots."))
+		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(FMargin(0.0f, 2.0f, 0.0f, 1.0f))
+		[
+			SNew(STextBlock)
+			.Font(FieldFont())
+			.ColorAndOpacity(FLinearColor(1.0f, 1.0f, 1.0f, 0.78f))
 			.Visibility_Lambda([WeakNode]() { return WeakNode.IsValid() && !WeakNode->SourceMaterial.IsNull() ? EVisibility::Visible : EVisibility::Collapsed; })
 			.Text_Lambda([WeakNode]()
 			{
