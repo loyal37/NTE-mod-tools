@@ -308,8 +308,8 @@ TSharedRef<SWidget> SHTToggleGraphNode::MakeOptionLabelBox(UHTToggleGraphNode_Sw
 			SNew(SEditableTextBox)
 			.Font(FieldFont())
 			.Text_Lambda([WeakNode, Option]() { return WeakNode.IsValid() ? FText::FromString(WeakNode->GetOptionLabel(Option)) : FText::GetEmpty(); })
-			.HintText(LOCTEXT("OptionLabelHint", "label"))
-			.ToolTipText(LOCTEXT("OptionLabelTooltip", "Option label shown by the in-game panel. Empty options show as Hidden."))
+			.HintText(LOCTEXT("OptionLabelHint", "Note (not shown in game)"))
+			.ToolTipText(LOCTEXT("OptionLabelTooltip", "Note for this option, for this graph only. It is not shown in game: the panel shows the option number (current / total). A collapsed switch shows it next to the option pin."))
 			.SelectAllTextWhenFocused(true)
 			.OnTextCommitted_Lambda([WeakNode, Option](const FText& Text, ETextCommit::Type)
 			{
