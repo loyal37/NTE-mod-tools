@@ -42,6 +42,15 @@ The release archive only contains the files the UE 5.6 Win64 editor needs to run
 
 Since v1.6.0 every update adds one to the last number and carries at ten: 1.6.0, 1.6.1, ... 1.6.9, 1.7.0. The version is shown in the editor's Plugins window and in the archive name.
 
+### Script library (v1.6.4)
+
+`unreal.HTModScriptLibrary` exposes the tool to editor Python and automation (for example an MCP server driving the running editor). Functions that take or return JSON use compact JSON strings with `success` and `errors`; nothing is saved unless the call asks for it.
+
+- Materials: `get_visible_material_parameters` (what the material instance editor lists, from `FMaterialEditorUtilities::GetVisibleMaterialParameters`), `get_material_expressions`, `is_static_switch_overridden`, `clear_material_instance_parameter` (static switch and component mask overrides).
+- Editors: `get_open_asset_editors`, `is_asset_open_in_editor`.
+- Toggle Tree: `describe_toggle_graph`, `check_toggle_graph` (what Compile checks, nothing changed), `refresh_toggle_graph_slots` (the Refresh button), `generate_toggle_graph` (the Compile button), `edit_toggle_graph` (a JSON list of add / set / connect / disconnect / remove / set_target operations applied as one undo step; a failing batch is undone).
+- Generators: `generate_toggle` (the four classic modes from JSON) and `build_material_instance` (the Material Instance tool).
+
 ## Blueprint toggles
 
 In `Settings`, choose the Animation Blueprint, the SaveGame Blueprint and the character folder. The choices are saved in the project configuration and are still there after closing and reopening the tool. When the character folder changes, the tool looks for the AnimBP and SaveGame Blueprint in that folder and fills in the paths above. The character folder is also where the tool looks for the character's materials.
